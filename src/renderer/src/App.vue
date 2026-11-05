@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { clientToVideo } from './utils/videoGeometry.mjs'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { containRect, viewportToVideo } from './utils/videoGeometry.mjs'
 
 type Point = { x: number; y: number }
 type Calibration = { cx: number; cy: number; radius: number; width: number; height: number }
@@ -10,6 +10,10 @@ const screen = ref<Screen>('welcome')
 const fileInput = ref<HTMLInputElement | null>(null)
 const calibrationVideo = ref<HTMLVideoElement | null>(null)
 const monitorVideo = ref<HTMLVideoElement | null>(null)
+const calibrationStage = ref<HTMLElement | null>(null)
+const monitorStage = ref<HTMLElement | null>(null)
+const calibrationBox = ref({ width: 0, height: 0 })
+const monitorBox = ref({ width: 0, height: 0 })
 const modalOpen = ref(false)
 const pendingFile = ref<File | null>(null)
 const pendingUrl = ref('')
@@ -50,6 +54,47 @@ const calibrationMeasure = computed(() => {
 const previewUrl = computed(() => pendingUrl.value || activeUrl.value)
 const overlaySize = computed(() => `${videoWidth.value || 1} ${videoHeight.value || 1}`)
 const draftOverlaySize = computed(() => `${draftWidth.value || 1} ${draftHeight.value || 1}`)
+
+function fittedViewportStyle(box: { width: number; height: number }, width: number, height: number): Record<string, string> {
+  const rect = containRect(box.width, box.height, width, height)
+  // The single fitted rectangle contains BOTH the video and overlay.
+  if (!rect) return { display: 'none' }
+  return {
+    left: rect.left + 'px',
+    top: rect.top + 'px',
+    width: rect.width + 'px',
+    height: rect.height + 'px',
+  }
+}
+const calibrationViewportStyle = computed(() =>
+  fittedViewportStyle(calibrationBox.value, draftWidth.value, draftHeight.value),
+)
+const monitorViewportStyle = computed(() =>
+  fittedViewportStyle(monitorBox.value, videoWidth.value, videoHeight.value),
+)
+let calibrationResizeObserver: ResizeObserver | undefined
+let monitorResizeObserver: ResizeObserver | undefined
+watch(calibrationStage, (node) => {
+  calibrationResizeObserver?.disconnect()
+  calibrationResizeObserver = undefined
+  calibrationBox.value = { width: 0, height: 0 }
+  if (!node) return
+  calibrationResizeObserver = new ResizeObserver(([entry]) => {
+    if (entry) calibrationBox.value = { width: entry.contentRect.width, height: entry.contentRect.height }
+  })
+  calibrationResizeObserver.observe(node)
+}, { flush: 'post' })
+watch(monitorStage, (node) => {
+  monitorResizeObserver?.disconnect()
+  monitorResizeObserver = undefined
+  monitorBox.value = { width: 0, height: 0 }
+  if (!node) return
+  monitorResizeObserver = new ResizeObserver(([entry]) => {
+    if (entry) monitorBox.value = { width: entry.contentRect.width, height: entry.contentRect.height }
+  })
+  monitorResizeObserver.observe(node)
+}, { flush: 'post' })
+
 const sectors = computed(() => {
   const c = calibration.value
   if (!c) return []
@@ -144,11 +189,9 @@ function onCalibrationSeek(event: Event): void {
 }
 function onCalibrationClick(event: MouseEvent): void {
   if (!modalOpen.value || !draftWidth.value || !draftHeight.value || radius.value !== null) return
-  // Use the actual video content box, not the bordered stage: video and SVG
-  // share this exact viewport, including the same letterbox offsets.
-  const rect = calibrationVideo.value?.getBoundingClientRect()
-  if (!rect) return
-  const point = clientToVideo(event.clientX, event.clientY, rect, draftWidth.value, draftHeight.value)
+  // The click target is already the fitted image: it contains no black bars.
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+  const point = viewportToVideo(event.clientX, event.clientY, rect, draftWidth.value, draftHeight.value)
   if (!point) return
   const { x, y } = point
   if (!center.value) {
@@ -242,6 +285,8 @@ function onEscape(event: KeyboardEvent): void {
 onMounted(() => { window.addEventListener('keydown', onEscape) })
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onEscape)
+  calibrationResizeObserver?.disconnect()
+  monitorResizeObserver?.disconnect()
   if (toastTimeout) clearTimeout(toastTimeout)
   if (activeUrl.value) URL.revokeObjectURL(activeUrl.value)
   if (pendingUrl.value) URL.revokeObjectURL(pendingUrl.value)
@@ -281,10 +326,11 @@ onBeforeUnmount(() => {
       <main class="workspace">
         <section class="panel video-panel">
           <div class="panel-heading"><span class="panel-title">检测画面</span><div class="heading-actions"><span class="live-label">● 视频预览</span><button class="btn btn-muted" @click="editCalibration">重新标注</button><button class="btn btn-muted" @click="chooseVideo">更换视频</button></div></div>
-          <div class="video-stage">
-            <div class="video-fit">
+          <div class="video-stage" ref="monitorStage">
+            <div class="video-fit" :style="monitorViewportStyle">
               <video ref="monitorVideo" class="video-element" :src="activeUrl" playsinline preload="metadata" @loadedmetadata="onMainMetadata" @timeupdate="onMainTime" @play="isPlaying = true" @pause="isPlaying = false" @ended="isPlaying = false" @error="videoError = '视频解码失败，请更换其他格式的视频'" />
-              <svg v-if="calibration" class="roi-overlay" :viewBox="overlaySize" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+              <svg v-if="calibration" class="roi-overlay" :viewBox="overlaySize" preserveAspectRatio="none" aria-hidden="true">
+                <circle :cx="calibration.cx" :cy="calibration.cy" :r="calibration.radius" class="wafer-outline"/>
                 <circle :cx="calibration.cx" :cy="calibration.cy" :r="calibration.radius * .95" class="ring-outer"/>
                 <circle :cx="calibration.cx" :cy="calibration.cy" :r="calibration.radius * .65" class="ring-inner"/>
                 <line v-for="(sector, i) in sectors" :key="i" :x1="sector.x1" :y1="sector.y1" :x2="sector.x2" :y2="sector.y2" class="sector-line"/>
@@ -292,7 +338,7 @@ onBeforeUnmount(() => {
               </svg>
             </div>
             <span class="viewport-label">检测画面</span>
-            <span class="video-legend">绿色：检测外缘　蓝色：内缘</span>
+            <span class="video-legend">灰色虚线：晶圆边缘 R　绿色：0.95R　蓝色：0.65R</span>
             <div v-if="videoError" class="video-error">{{ videoError }}</div>
           </div>
           <div class="video-footer">
@@ -315,7 +361,7 @@ onBeforeUnmount(() => {
     <div v-if="modalOpen" class="modal-mask" @click.self="closeCalibration">
       <section class="calibration-modal" role="dialog" aria-modal="true" aria-labelledby="calibration-title">
         <div class="modal-header"><div><h2 id="calibration-title">标注晶圆位置</h2><p>点击画面中的晶圆中心，再点击晶圆边缘</p></div><button type="button" class="modal-close" title="取消标注" aria-label="取消标注" @click="closeCalibration">×</button></div>
-        <div class="modal-body"><div class="calibration-stage" :class="{ 'stage-ready': !!draftWidth }" @click="onCalibrationClick"><video ref="calibrationVideo" :src="previewUrl" playsinline muted preload="metadata" @loadedmetadata="onCalibrationMetadata" @timeupdate="onCalibrationTime" @error="notify('无法读取视频，请尝试其他格式')"/><svg class="roi-overlay" :viewBox="draftOverlaySize" preserveAspectRatio="xMidYMid meet" aria-hidden="true"><template v-if="center"><path :d="`M ${center.x-13} ${center.y} h26 M ${center.x} ${center.y-13} v26`" class="calib-cross"/><circle :cx="center.x" :cy="center.y" r="4" fill="#59d7ff"/></template><template v-if="draftCalibration"><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius" class="calib-wafer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * .95" class="ring-outer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * .65" class="ring-inner"/></template></svg><div class="frame-label">绿色：检测外缘　蓝色：内缘</div></div>
+        <div class="modal-body"><div ref="calibrationStage" class="calibration-stage" :class="{ 'stage-ready': !!draftWidth }"><div class="video-fit calibration-fit" :style="calibrationViewportStyle" @click="onCalibrationClick"><video ref="calibrationVideo" :src="previewUrl" playsinline muted preload="metadata" @loadedmetadata="onCalibrationMetadata" @timeupdate="onCalibrationTime" @error="notify('无法读取视频，请尝试其他格式')"/><svg class="roi-overlay" :viewBox="draftOverlaySize" preserveAspectRatio="none" aria-hidden="true"><template v-if="center"><path :d="`M ${center.x-13} ${center.y} h26 M ${center.x} ${center.y-13} v26`" class="calib-cross"/><circle :cx="center.x" :cy="center.y" r="4" fill="#59d7ff"/></template><template v-if="draftCalibration"><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius" class="calib-wafer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * .95" class="ring-outer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * .65" class="ring-inner"/></template></svg></div><div class="frame-label">灰色虚线：晶圆边缘 R　绿色：0.95R　蓝色：0.65R</div></div>
           <div class="calib-timeline"><span>定位画面</span><input type="range" aria-label="标注画面位置" min="0" :max="calibrationDuration || 1" step="0.01" :value="calibrationTime" :style="{ '--progress': calibrationProgress + '%' }" :disabled="!calibrationDuration" @input="onCalibrationSeek"/><span>{{ formatTime(calibrationTime) }} / {{ formatTime(calibrationDuration) }}</span></div>
           <div class="calibration-status"><strong>{{ calibrationPhase }}</strong><span>{{ calibrationMeasure }}</span></div>
         </div>

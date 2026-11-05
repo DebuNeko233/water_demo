@@ -23,3 +23,16 @@ export function clientToVideo(clientX, clientY, box, videoWidth, videoHeight) {
   return { x: Math.max(0, Math.min(videoWidth, localX / fit.scale)),
     y: Math.max(0, Math.min(videoHeight, localY / fit.scale)) }
 }
+
+/** Coordinate of a point clicked inside the already fitted viewport.
+ * Unlike clientToVideo, there is no second contain/letterbox transformation.
+ */
+export function viewportToVideo(clientX, clientY, rect, videoWidth, videoHeight) {
+  if (![clientX, clientY, rect.left, rect.top, rect.width, rect.height, videoWidth, videoHeight]
+    .every(v => Number.isFinite(v)) || rect.width <= 0 || rect.height <= 0 ||
+    videoWidth <= 0 || videoHeight <= 0) return null
+  const x = (clientX - rect.left) * videoWidth / rect.width
+  const y = (clientY - rect.top) * videoHeight / rect.height
+  if (x < 0 || x > videoWidth || y < 0 || y > videoHeight) return null
+  return { x, y }
+}

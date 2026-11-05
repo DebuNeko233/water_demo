@@ -4,3 +4,6 @@ export function containRect(boxWidth: number, boxHeight: number, videoWidth: num
 export function clientToVideo(clientX: number, clientY: number,
   box: { left: number; top: number; width: number; height: number },
   videoWidth: number, videoHeight: number): VideoPoint | null
+export function viewportToVideo(clientX: number, clientY: number,
+  rect: { left: number; top: number; width: number; height: number },
+  videoWidth: number, videoHeight: number): VideoPoint | null
