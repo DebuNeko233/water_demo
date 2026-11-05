@@ -114,6 +114,16 @@ function registerIpc(): void {
     const error = await shell.openPath(directory)
     if (error) throw new Error(error)
   })
+  ipcMain.handle('system:minimize', (event) => {
+    checkSender(event)
+    mainWindow?.minimize()
+  })
+  ipcMain.handle('system:toggle-maximize', (event) => {
+    checkSender(event)
+    if (!mainWindow) return
+    if (mainWindow.isMaximized()) mainWindow.unmaximize()
+    else mainWindow.maximize()
+  })
   ipcMain.handle('system:close-window', (event) => {
     checkSender(event)
     mainWindow?.close()
@@ -123,12 +133,13 @@ function registerIpc(): void {
 function createWindow(show = true): BrowserWindow {
   mainWindow = new BrowserWindow({
     show,
-    width: 1200,
-    height: 790,
-    minWidth: 800,
-    minHeight: 600,
+    width: 1440,
+    height: 900,
+    minWidth: 1000,
+    minHeight: 650,
+    frame: false,
     autoHideMenuBar: true,
-    backgroundColor: '#f5f7fb',
+    backgroundColor: '#07111c',
     // 只经 Preload 暴露白名单 API：Renderer 保持沙箱、上下文隔离和无 Node 权限。
     webPreferences: {
       preload: path.join(mainDirectory, '../preload/index.cjs'),
@@ -199,50 +210,22 @@ async function runPackagedSmokeTest(): Promise<void> {
       message: string
     }
     if (echo.message !== 'Electron smoke test') throw new Error('Python HTTP echo mismatch')
-    // Also exercise the actual Vue sidebar, not just the Python transport.
+    // Also exercise the real ZeboVision entry screen, not just the Python transport.
     registerIpc()
     const browser = createWindow(false)
     const result: unknown = await browser.webContents.executeJavaScript(
-      `(async () => {
-        const buttons = [...document.querySelectorAll('aside nav button')]
-        const expected = ['应用概览', 'HTTP 示例', '实时任务', 'IPC 示例']
-        if (buttons.length !== expected.length) {
-          throw new Error('Expected four sidebar buttons')
+      `(() => {
+        const title = document.querySelector('.app-title')?.textContent?.trim()
+        const heading = document.querySelector('.welcome-card h1')?.textContent?.trim()
+        const chooser = document.querySelector('.welcome-select')
+        const fileInput = document.querySelector('input[type="file"]')
+        if (title !== 'ZeboVision湿法清洗检测系统' ||
+            heading !== '选择检测视频' ||
+            chooser?.textContent?.trim() !== '选择视频文件' ||
+            !fileInput) {
+          throw new Error('ZeboVision V3 entry screen not rendered')
         }
-
-        for (let index = 0; index < buttons.length; index++) {
-          buttons[index].click()
-          await new Promise((resolve) => setTimeout(resolve, 30))
-          const title = document.querySelector('h1')?.textContent?.trim()
-          const selected = document.querySelectorAll('aside nav button[aria-current="page"]')
-          if (title !== expected[index] || selected.length !== 1 ||
-              selected[0] !== buttons[index]) {
-            throw new Error('Sidebar did not navigate to ' + expected[index])
-          }
-        }
-
-        // The task component must remain mounted when switching between tabs.
-        buttons[2].click()
-        await new Promise((resolve) => setTimeout(resolve, 30))
-        const task = document.querySelector('#tasks')
-        const start = task?.querySelector('button')
-        if (!start) throw new Error('Task page has no start button')
-        start.click()
-
-        const deadline = Date.now() + 8_000
-        while (!task?.querySelector('.small')?.textContent?.includes('Task ID:')) {
-          if (Date.now() > deadline) throw new Error('Task did not start')
-          await new Promise((resolve) => setTimeout(resolve, 100))
-        }
-        const taskId = task.querySelector('.small').textContent
-        buttons[1].click()
-        await new Promise((resolve) => setTimeout(resolve, 30))
-        buttons[2].click()
-        await new Promise((resolve) => setTimeout(resolve, 30))
-        if (task.querySelector('.small')?.textContent !== taskId) {
-          throw new Error('Task state was discarded when navigating')
-        }
-        return 'Navigation and task state OK'
+        return 'ZeboVision V3 entry screen OK'
       })()`,
       true,
     )

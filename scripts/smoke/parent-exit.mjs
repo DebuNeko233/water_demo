@@ -12,8 +12,8 @@ import { setTimeout as pause } from 'node:timers/promises'
 
 if (process.platform !== 'win32') throw new Error('Windows-only test')
 
-const executable = path.resolve('dist/win-unpacked/SampleApp.exe')
-assert.ok(fs.existsSync(executable), 'SampleApp.exe is missing')
+const executable = path.resolve('dist/win-unpacked/ZeboVision.exe')
+assert.ok(fs.existsSync(executable), 'ZeboVision.exe is missing')
 
 const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'sample-parent-exit-'))
 const report = path.join(folder, 'backend.json')

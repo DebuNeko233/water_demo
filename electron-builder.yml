@@ -1,5 +1,5 @@
-appId: com.example.python-electron-vue-sample
-productName: SampleApp
+appId: com.zebovision.waterdemo
+productName: ZeboVision
 # Electron 前端编译文件归档进 app.asar；可执行的 CPython 必须作为额外资源放在外面。
 asar: true
 directories:
@@ -12,4 +12,4 @@ extraResources:
   - from: build/backend
     to: backend
 win:
-  artifactName: SampleApp-${version}-${arch}.${ext}
+  artifactName: ZeboVision-${version}-${arch}.${ext}

@@ -1,5 +1,5 @@
 {
-  "name": "python-electron-vue-template",
+  "name": "water-demo",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -38,5 +38,5 @@
   "engines": {
     "node": ">=22"
   },
-  "description": "Portable Electron + Vue + FastAPI starter with uv-managed Python"
+  "description": "ZeboVision 湿法清洗检测系统：Electron + Vue + Python desktop application"
 }

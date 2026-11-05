@@ -29,6 +29,8 @@ export interface DesktopBridge {
   system: {
     selectFile(): Promise<string | null>
     openLogs(target?: LogTarget): Promise<void>
+    minimize(): Promise<void>
+    toggleMaximize(): Promise<void>
     closeWindow(): Promise<void>
   }
 }

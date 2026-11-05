@@ -27,6 +27,8 @@ const desktop: DesktopBridge = {
   system: {
     selectFile: () => ipcRenderer.invoke('system:select-file'),
     openLogs: (target) => ipcRenderer.invoke('system:open-logs', target),
+    minimize: () => ipcRenderer.invoke('system:minimize'),
+    toggleMaximize: () => ipcRenderer.invoke('system:toggle-maximize'),
     closeWindow: () => ipcRenderer.invoke('system:close-window'),
   },
 }

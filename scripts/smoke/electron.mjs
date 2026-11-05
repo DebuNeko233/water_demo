@@ -1,5 +1,5 @@
 /**
- * 启动真实的 win-unpacked/SampleApp.exe，覆盖 Electron 启动及其管理的 Python。
+ * 启动真实的 win-unpacked/ZeboVision.exe，覆盖 Electron 启动及其管理的 Python。
  * 不与独立 Python 冒烟测试合并，因为这里重点验证进程所有权。
  */
 
@@ -14,8 +14,8 @@ if (process.platform !== 'win32') {
   throw new Error('Run the packaged Electron smoke test on Windows')
 }
 
-const executable = path.resolve('dist/win-unpacked/SampleApp.exe')
-assert.ok(fs.existsSync(executable), 'Packaged SampleApp.exe was not built')
+const executable = path.resolve('dist/win-unpacked/ZeboVision.exe')
+assert.ok(fs.existsSync(executable), 'Packaged ZeboVision.exe was not built')
 
 const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'sample-electron-smoke-'))
 const reportPath = path.join(folder, 'report.json')
