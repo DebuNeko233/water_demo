@@ -1,0 +1,19 @@
+node_modules/
+.tools/
+out/
+dist/
+build/
+backend/.venv/
+backend/.pytest_cache/
+**/__pycache__/
+*.py[cod]
+*.log
+*.tmp
+.env
+.idea/
+.vscode/
+.DS_Store
+
+# This starter resolves compatible dependencies from version ranges.
+pnpm-lock.yaml
+backend/uv.lock
