@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { clientToVideo } from './utils/videoGeometry.mjs'
 
 type Point = { x: number; y: number }
 type Calibration = { cx: number; cy: number; radius: number; width: number; height: number }
@@ -143,13 +144,13 @@ function onCalibrationSeek(event: Event): void {
 }
 function onCalibrationClick(event: MouseEvent): void {
   if (!modalOpen.value || !draftWidth.value || !draftHeight.value || radius.value !== null) return
-  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
-  const ratio = Math.min(rect.width / draftWidth.value, rect.height / draftHeight.value)
-  const width = draftWidth.value * ratio
-  const height = draftHeight.value * ratio
-  const x = (event.clientX - rect.left - (rect.width - width) / 2) / ratio
-  const y = (event.clientY - rect.top - (rect.height - height) / 2) / ratio
-  if (x < 0 || x > draftWidth.value || y < 0 || y > draftHeight.value) return
+  // Use the actual video content box, not the bordered stage: video and SVG
+  // share this exact viewport, including the same letterbox offsets.
+  const rect = calibrationVideo.value?.getBoundingClientRect()
+  if (!rect) return
+  const point = clientToVideo(event.clientX, event.clientY, rect, draftWidth.value, draftHeight.value)
+  if (!point) return
+  const { x, y } = point
   if (!center.value) {
     center.value = { x, y }
   } else {
