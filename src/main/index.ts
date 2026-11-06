@@ -11,6 +11,10 @@ import { installLogging } from './logging'
 import type { BackendStatus } from '../shared/bridge'
 
 const mainDirectory = path.dirname(fileURLToPath(import.meta.url))
+// One exact user-provided ICO is used for Windows exe, BrowserWindow and favicon.
+const windowIconPath = app.isPackaged
+  ? path.join(process.resourcesPath, 'icon.ico')
+  : path.resolve(mainDirectory, '../../resources/icon.ico')
 let mainWindow: BrowserWindow | null = null
 let closing = false
 let allowQuit = false
@@ -140,6 +144,7 @@ function createWindow(show = true): BrowserWindow {
     frame: false,
     autoHideMenuBar: true,
     backgroundColor: '#07111c',
+    icon: windowIconPath,
     // 只经 Preload 暴露白名单 API：Renderer 保持沙箱、上下文隔离和无 Node 权限。
     webPreferences: {
       preload: path.join(mainDirectory, '../preload/index.cjs'),
