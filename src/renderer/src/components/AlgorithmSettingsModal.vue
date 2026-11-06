@@ -13,6 +13,8 @@ const emit = defineEmits<{
 }>()
 const draft = reactive<AlgorithmSettings>(copyAlgorithmSettings(props.settings))
 const error = computed(() => validateAlgorithmSettings(draft))
+// 暂时隐藏该分组的编辑控件，不删除设置项或改变 Python 检测器参数。
+const visibleAlgorithmGroups = ALGORITHM_GROUPS.filter(group => group.title !== '图像与时序')
 
 function defaults(): void {
   Object.assign(draft, DEFAULT_ALGORITHM_SETTINGS)
@@ -35,7 +37,7 @@ function save(): void {
       </header>
       <form class="algorithm-form" @submit.prevent="save">
         <div class="algorithm-scroll">
-          <section v-for="group in ALGORITHM_GROUPS" :key="group.title" class="algorithm-section">
+          <section v-for="group in visibleAlgorithmGroups" :key="group.title" class="algorithm-section">
             <div class="algorithm-section-title">
               <strong>{{ group.title }}</strong>
               <span>{{ group.hint }}</span>
