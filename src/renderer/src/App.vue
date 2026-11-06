@@ -416,7 +416,7 @@ function onMainSeeking(): void {
   detection.onSeekStart()
 }
 function onMainSeeked(): void {
-  if (calibration.value && detectorStatus.value === 'idle') detection.onSeekEnd()
+  if (calibration.value && detectorStatus.value === 'idle') void detection.start(calibration.value)
 }
 function onMainMetadata(): void {
   const video = monitorVideo.value
