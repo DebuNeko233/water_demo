@@ -1,14 +1,10 @@
-"""Guard canonical algorithm parity with the user-uploaded main1_chn.py.
-
-Hashes were computed from the AST of the uploaded file's DemoConfig,
-Calibration and WaterDetector classes. This covers all executable statements,
-defaults and method bodies, independent of formatting or comments.
+"""Compare the original uploaded main1_chn.py directly with the backend core.
+The full uploaded file is preserved in tests/fixtures; it is never imported.
 """
 from __future__ import annotations
 
 import ast
 import base64
-import hashlib
 from pathlib import Path
 
 import cv2
@@ -18,26 +14,34 @@ from fastapi.testclient import TestClient
 from sample_backend.main import create_app
 from sample_backend.services.water_detection import Calibration, DemoConfig, WaterDetector
 
-SOURCE_SHA256 = {
-    'DemoConfig': 'f422b062236a899b7dfd0cfcfd809f4fa545edd332f099e84f47059d0ae17e85',
-    'Calibration': '3bb83270ccd1bb7e6fe4008dc1061ea37a5122d08a749cb380641df001304fcf',
-    'WaterDetector': '4c588e7f0b0d552c57fbdcd91f15a56edb2c954904901e52b78386afe45ca144',
-}
+def test_core_classes_are_structurally_identical_to_uploaded_main1_chn_py():
+    """Compare the real uploaded source in the same Python AST runtime.
 
+    Unlike precomputed AST hashes, a same-interpreter comparison is stable
+    across Python 3.10/3.12/3.14 and catches any change to executable logic,
+    constant values, defaults, type annotations, or WaterDetector methods.
+    """
+    here = Path(__file__).resolve()
+    original_path = here.parent / 'fixtures' / 'main1_chn.py'
+    live_path = (here.parents[1] / 'src' / 'sample_backend'
+                 / 'services' / 'water_detection.py')
 
-def test_core_matches_uploaded_main1_chn_py_ast_exactly():
-    path = (Path(__file__).resolve().parents[1]
-            / 'src' / 'sample_backend' / 'services' / 'water_detection.py')
-    tree = ast.parse(path.read_text(encoding='utf-8'))
-    classes = {
-        node.name: node for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name in SOURCE_SHA256
-    }
-    assert set(classes) == set(SOURCE_SHA256)
-    for name, expected in SOURCE_SHA256.items():
-        canonical = ast.dump(classes[name], annotate_fields=True, include_attributes=False)
-        sha = hashlib.sha256(canonical.encode('utf-8')).hexdigest()
-        assert sha == expected, f'{name} differs from uploaded main1_chn.py: {sha}'
+    def classes(path):
+        tree = ast.parse(path.read_text(encoding='utf-8'))
+        names = {'DemoConfig', 'Calibration', 'WaterDetector'}
+        return {
+            node.name: node for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name in names
+        }
+
+    reference = classes(original_path)
+    backend = classes(live_path)
+    assert set(reference) == {'DemoConfig', 'Calibration', 'WaterDetector'}
+    assert set(backend) == set(reference)
+    for name, expected in reference.items():
+        assert ast.dump(backend[name], include_attributes=False) == (
+            ast.dump(expected, include_attributes=False)
+        ), f'{name} differs from the uploaded main1_chn.py'
 
 
 def test_http_api_equals_direct_water_detector_on_same_frames_even_with_gaps():
