@@ -113,11 +113,17 @@ export class BackendManager {
     }
     // 每次启动生成新的会话/控制令牌，前者用于 API，后者仅用于停机。
     const sessionId = randomUUID()
-    const startupDirectory = path.join(app.getPath('userData'), 'startup')
-    fs.mkdirSync(startupDirectory, { recursive: true })
-    this.readyFile = path.join(startupDirectory, sessionId + '.json')
-    this.sessionToken = randomBytes(32).toString('hex')
-    this.controlToken = randomBytes(32).toString('hex')
+    try {
+      const startupDirectory = path.join(app.getPath('userData'), 'startup')
+      fs.mkdirSync(startupDirectory, { recursive: true })
+      this.readyFile = path.join(startupDirectory, sessionId + '.json')
+      this.sessionToken = randomBytes(32).toString('hex')
+      this.controlToken = randomBytes(32).toString('hex')
+    } catch (error) {
+      this.latestError = '无法创建 Python 启动目录：' + String(error)
+      this.change('failed')
+      throw new Error(this.latestError)
+    }
 
     // Python startup tracebacks must survive a release-build crash.
     // Otherwise users see only "backend is not ready" and we cannot diagnose
