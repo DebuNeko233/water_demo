@@ -206,11 +206,15 @@ async function runPackagedSmokeTest(): Promise<void> {
   let pythonPid: number | null = null
   try {
     if (!app.isPackaged) throw new Error('Packaged smoke test requires a release build')
-    await backend.start()
+    // Reproduce the real user race: the monitor sends its first request
+    // *while* packaged Python is still completing the ready-file handshake.
+    // Both operations must succeed rather than returning "backend not ready".
+    const starting = backend.start()
+    const earlyHealth = backend.request('GET', '/api/health')
+    const [, health] = await Promise.all([starting, earlyHealth]) as [void, { status: string }]
     pythonPid = backend.ownedPid
     if (backend.status !== 'ready') throw new Error('Python did not report READY')
-    const health = await backend.request('GET', '/api/health') as { status: string }
-    if (health.status !== 'ready') throw new Error('Python health check failed')
+    if (health.status !== 'ready') throw new Error('Python early-request health check failed')
     const echo = await backend.request('POST', '/api/echo', { message: 'Electron smoke test' }) as {
       message: string
     }
