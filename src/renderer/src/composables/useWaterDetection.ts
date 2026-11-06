@@ -68,7 +68,7 @@ export function useWaterDetection(videoRef: Ref<HTMLVideoElement | null>) {
     } catch (reason) {
       if (version !== epoch) return
       status.value = 'error'
-      error.value = 'Python 检测服务未连接：' + String(reason)
+      error.value = '检测启动失败：' + String(reason)
     }
   }
 

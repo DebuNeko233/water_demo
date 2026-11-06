@@ -406,7 +406,13 @@ function onMainFrameReady(): void {
 }
 function onMainPlay(): void {
   isPlaying.value = true
-  detection.onPlay()
+  // Always retry with the currently confirmed calibration, never a previous
+  // video's geometry retained by a stale session.
+  if (calibration.value && (detectorStatus.value === 'idle' || detectorStatus.value === 'error')) {
+    void detection.start(calibration.value)
+  } else {
+    detection.onPlay()
+  }
 }
 function onMainPause(): void {
   isPlaying.value = false
