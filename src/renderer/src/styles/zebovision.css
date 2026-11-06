@@ -36,3 +36,25 @@
 }
 .calibration-stage > .calibration-fit { cursor: crosshair; }
 .wafer-outline { fill: none; stroke: #e6eef4; stroke-width: 2; stroke-dasharray: 8 6; }
+
+/* A pixel-space red dot, independent from the fitted video's SVG viewBox.
+   The modal mask covers the entire browser viewport, so clientX/clientY
+   identify this marker's exact original click position. */
+.modal-header-actions{display:flex;align-items:center;gap:13px}
+.coordinate-toggle{background:#17374b;border:1px solid #37647f;color:#a6ddfa;border-radius:5px;font-size:11px;padding:7px 10px}
+.coordinate-toggle:hover{background:#1b4964}
+.coordinate-debug{margin:10px 4px 0;padding:9px 12px;border-radius:5px;border:1px solid #37546c;background:#0a1c2b;color:#a9c6da;font-size:11px}
+.coordinate-debug-heading{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.coordinate-debug-heading b{color:#f2f6fa}
+.coordinate-copy{background:transparent;border:1px solid #315571;border-radius:4px;padding:5px 10px;color:#b9e1f4;font-size:11px}
+.coordinate-copy:disabled{opacity:.35;cursor:default}
+.coordinate-debug-values{display:flex;align-items:center;gap:13px;flex-wrap:wrap;margin-top:7px;font-variant-numeric:tabular-nums}
+.coordinate-debug-values b{color:#55e1a1}
+.coordinate-debug-values b.coordinate-error{color:#ff8792}
+.coordinate-debug-values small{color:#7c9db3}
+.coordinate-debug-hint{margin-top:6px;color:#839ead}
+.raw-click-marker{pointer-events:none;position:fixed;z-index:30;width:17px;height:17px;transform:translate(-50%,-50%);border:2px solid #ff4d60;border-radius:50%;box-shadow:0 0 0 2px #071421d9,0 0 0 4px #ff4d6088;background:#ff334444}
+.raw-click-marker::after{content:'';position:absolute;left:50%;top:50%;width:3px;height:3px;transform:translate(-50%,-50%);background:white;border-radius:50%}
+.raw-click-marker.marker-edge{border-color:#ffb34e;box-shadow:0 0 0 2px #071421d9,0 0 0 4px #ffb34e88;background:#ffb34e33}
+.raw-click-marker>span{position:absolute;left:16px;top:-10px;white-space:nowrap;color:#ff7d8a;background:#081824ed;font-size:11px;padding:2px 4px}
+.raw-click-marker.marker-edge>span{color:#ffd18f}

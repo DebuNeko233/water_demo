@@ -2,9 +2,24 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { containRect, viewportToVideo } from './utils/videoGeometry.mjs'
 import { seekToReferenceFrame } from './utils/videoPlayback.mjs'
+import { svgClientToSource, svgSourceToClient } from './utils/svgCoordinates.mjs'
 
 type Point = { x: number; y: number }
 type Calibration = { cx: number; cy: number; radius: number; width: number; height: number }
+type CoordinateCheck = {
+  click: Point
+  source: Point
+  actualError: number
+  legacyError: number | null
+  layerMismatch: number
+  videoRect: string
+  svgRect: string
+  viewportRect: string
+  resolution: string
+  devicePixelRatio: number
+  timestamp: number
+}
+type ClickMarker = { x: number; y: number; kind: '中心' | '边缘' }
 
 type Screen = 'welcome' | 'monitor'
 const screen = ref<Screen>('welcome')
@@ -12,6 +27,10 @@ const fileInput = ref<HTMLInputElement | null>(null)
 const calibrationVideo = ref<HTMLVideoElement | null>(null)
 const monitorVideo = ref<HTMLVideoElement | null>(null)
 const calibrationStage = ref<HTMLElement | null>(null)
+const calibrationSvg = ref<SVGSVGElement | null>(null)
+const coordinateCheckEnabled = ref(true)
+const clickMarkers = ref<ClickMarker[]>([])
+const coordinateCheck = ref<CoordinateCheck | null>(null)
 const monitorStage = ref<HTMLElement | null>(null)
 const calibrationBox = ref({ width: 0, height: 0 })
 const monitorBox = ref({ width: 0, height: 0 })
@@ -142,6 +161,8 @@ function onFileChange(event: Event): void {
 function resetDraft(): void {
   center.value = null
   radius.value = null
+  clickMarkers.value = []
+  coordinateCheck.value = null
 }
 function openCalibration(existing: boolean): void {
   if (modalOpen.value) return
@@ -198,19 +219,86 @@ function onCalibrationSeek(event: Event): void {
   calibrationTime.value = v.currentTime
   resetDraft()
 }
+function formatRect(rect: DOMRect | undefined): string {
+  return rect
+    ? `${rect.left.toFixed(1)},${rect.top.toFixed(1)} | ${rect.width.toFixed(1)}×${rect.height.toFixed(1)}`
+    : 'N/A'
+}
 function onCalibrationClick(event: MouseEvent): void {
-  if (!modalOpen.value || !calibrationFrameReady.value || !draftWidth.value || !draftHeight.value || radius.value !== null || calibrationVideo.value?.seeking) return
-  // The click target is already the fitted image: it contains no black bars.
-  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
-  const point = viewportToVideo(event.clientX, event.clientY, rect, draftWidth.value, draftHeight.value)
+  const svg = calibrationSvg.value
+  if (!modalOpen.value || !calibrationFrameReady.value || !draftWidth.value || !draftHeight.value ||
+      calibrationVideo.value?.seeking || !svg) return
+
+  // Map the pointer through the *actual SVG transformation* used to paint the
+  // crosshair. This avoids independent CSS-rectangle assumptions.
+  const point = svgClientToSource(svg, event.clientX, event.clientY)
   if (!point) return
-  const { x, y } = point
+
+  const boxRect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+  const videoRect = calibrationVideo.value?.getBoundingClientRect()
+  const svgRect = svg.getBoundingClientRect()
+  const oldPoint = viewportToVideo(event.clientX, event.clientY, boxRect, draftWidth.value, draftHeight.value)
+  const projected = svgSourceToClient(svg, point.x, point.y)
+  const legacyProjected = oldPoint ? svgSourceToClient(svg, oldPoint.x, oldPoint.y) : null
+
+  if (coordinateCheckEnabled.value) {
+    coordinateCheck.value = {
+      click: { x: event.clientX, y: event.clientY },
+      source: point,
+      actualError: projected ? Math.hypot(projected.x - event.clientX, projected.y - event.clientY) : NaN,
+      legacyError: legacyProjected
+        ? Math.hypot(legacyProjected.x - event.clientX, legacyProjected.y - event.clientY) : null,
+      layerMismatch: videoRect ? Math.max(
+        Math.abs(videoRect.left - svgRect.left), Math.abs(videoRect.top - svgRect.top),
+        Math.abs(videoRect.width - svgRect.width), Math.abs(videoRect.height - svgRect.height),
+      ) : NaN,
+      videoRect: formatRect(videoRect),
+      svgRect: formatRect(svgRect),
+      viewportRect: formatRect(boxRect),
+      resolution: `${draftWidth.value}×${draftHeight.value}`,
+      devicePixelRatio: window.devicePixelRatio,
+      timestamp: calibrationVideo.value?.currentTime ?? 0,
+    }
+    // Real mouse positions are rendered by HTML in screen pixels, completely
+    // independently of the SVG coordinate system.
+    if (radius.value === null) {
+      clickMarkers.value = [...clickMarkers.value,
+        { x: event.clientX, y: event.clientY, kind: center.value ? '边缘' : '中心' }]
+    }
+  }
+
+  if (radius.value !== null) return
   if (!center.value) {
-    center.value = { x, y }
+    center.value = point
   } else {
-    const r = Math.hypot(x - center.value.x, y - center.value.y)
-    if (r < 20) { notify('半径过小，请重新点击边缘'); return }
+    const r = Math.hypot(point.x - center.value.x, point.y - center.value.y)
+    if (r < 20) {
+      notify('半径过小，请重新点击边缘')
+      if (coordinateCheckEnabled.value) clickMarkers.value = clickMarkers.value.slice(0, -1)
+      return
+    }
     radius.value = r
+  }
+}
+async function copyCoordinateCheck(): Promise<void> {
+  const result = coordinateCheck.value
+  if (!result) return
+  const lines = [
+    'ZeboVision 标注坐标校验',
+    `时间: ${result.timestamp.toFixed(3)}s; 视频: ${result.resolution}; DPR: ${result.devicePixelRatio}`,
+    `鼠标(client): ${result.click.x.toFixed(2)}, ${result.click.y.toFixed(2)}`,
+    `SVG原图像素: ${result.source.x.toFixed(2)}, ${result.source.y.toFixed(2)}`,
+    `SVG绘制偏差: ${result.actualError.toFixed(3)}px; 旧映射偏差: ${result.legacyError?.toFixed(3) ?? 'N/A'}px`,
+    `视频/SVG盒差: ${result.layerMismatch.toFixed(3)}px`,
+    `视频矩形: ${result.videoRect}`,
+    `SVG矩形: ${result.svgRect}`,
+    `点击层矩形: ${result.viewportRect}`,
+  ]
+  try {
+    await navigator.clipboard.writeText(lines.join('\n'))
+    notify('坐标校验数据已复制')
+  } catch {
+    notify('复制失败，请截图校验数据')
   }
 }
 function closeCalibration(): void {
@@ -379,13 +467,28 @@ onBeforeUnmount(() => {
     <input ref="fileInput" class="hidden-input" type="file" accept="video/*,.mp4,.mov,.avi,.mkv,.webm,.m4v" aria-label="选择视频文件" @change="onFileChange"/>
     <div v-if="modalOpen" class="modal-mask" @click.self="closeCalibration">
       <section class="calibration-modal" role="dialog" aria-modal="true" aria-labelledby="calibration-title">
-        <div class="modal-header"><div><h2 id="calibration-title">标注晶圆位置</h2><p>点击画面中的晶圆中心，再点击晶圆边缘</p></div><button type="button" class="modal-close" title="取消标注" aria-label="取消标注" @click="closeCalibration">×</button></div>
-        <div class="modal-body"><div ref="calibrationStage" class="calibration-stage" :class="{ 'stage-ready': !!draftWidth }"><div class="video-fit calibration-fit" :style="calibrationViewportStyle" @click="onCalibrationClick"><video ref="calibrationVideo" :src="previewUrl" playsinline muted preload="metadata" @loadedmetadata="onCalibrationMetadata" @loadeddata="onCalibrationFrameReady" @timeupdate="onCalibrationTime" @seeking="calibrationFrameReady = false" @seeked="onCalibrationFrameReady" @error="notify('无法读取视频，请尝试其他格式')"/><svg class="roi-overlay" :viewBox="draftOverlaySize" preserveAspectRatio="none" aria-hidden="true"><template v-if="center"><path :d="`M ${center.x-13} ${center.y} h26 M ${center.x} ${center.y-13} v26`" class="calib-cross"/><circle :cx="center.x" :cy="center.y" r="4" fill="#59d7ff"/></template><template v-if="draftCalibration"><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius" class="calib-wafer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * .95" class="ring-outer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * .65" class="ring-inner"/></template></svg></div><div class="frame-label">灰色虚线：晶圆边缘 R　绿色：0.95R　蓝色：0.65R</div></div>
+        <div class="modal-header"><div><h2 id="calibration-title">标注晶圆位置</h2><p>点击画面中的晶圆中心，再点击晶圆边缘</p></div><div class="modal-header-actions"><button type="button" class="coordinate-toggle" :aria-pressed="coordinateCheckEnabled" @click="coordinateCheckEnabled = !coordinateCheckEnabled">{{ coordinateCheckEnabled ? '坐标校验：开' : '坐标校验：关' }}</button><button type="button" class="modal-close" title="取消标注" aria-label="取消标注" @click="closeCalibration">×</button></div></div>
+        <div class="modal-body"><div ref="calibrationStage" class="calibration-stage" :class="{ 'stage-ready': !!draftWidth }"><div class="video-fit calibration-fit" :style="calibrationViewportStyle" @click="onCalibrationClick"><video ref="calibrationVideo" :src="previewUrl" playsinline muted preload="metadata" @loadedmetadata="onCalibrationMetadata" @loadeddata="onCalibrationFrameReady" @timeupdate="onCalibrationTime" @seeking="calibrationFrameReady = false" @seeked="onCalibrationFrameReady" @error="notify('无法读取视频，请尝试其他格式')"/><svg ref="calibrationSvg" class="roi-overlay" :viewBox="draftOverlaySize" preserveAspectRatio="none" aria-hidden="true"><template v-if="center"><path :d="`M ${center.x-13} ${center.y} h26 M ${center.x} ${center.y-13} v26`" class="calib-cross"/><circle :cx="center.x" :cy="center.y" r="4" fill="#59d7ff"/></template><template v-if="draftCalibration"><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius" class="calib-wafer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * .95" class="ring-outer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * .65" class="ring-inner"/></template></svg></div><div class="frame-label">灰色虚线：晶圆边缘 R　绿色：0.95R　蓝色：0.65R</div></div>
           <div class="calib-timeline"><span>定位画面</span><input type="range" aria-label="标注画面位置" min="0" :max="calibrationDuration || 1" step="0.01" :value="calibrationTime" :style="{ '--progress': calibrationProgress + '%' }" :disabled="!calibrationDuration" @input="onCalibrationSeek"/><span>{{ formatTime(calibrationTime) }} / {{ formatTime(calibrationDuration) }}</span></div>
           <div class="calibration-status"><strong>{{ calibrationPhase }}</strong><span>{{ calibrationMeasure }}</span></div>
+          <div v-if="coordinateCheckEnabled" class="coordinate-debug">
+            <div class="coordinate-debug-heading"><span><b>坐标校验</b>　红点：鼠标实际落点　蓝色十字：绘制位置</span><button type="button" class="coordinate-copy" :disabled="!coordinateCheck" @click="copyCoordinateCheck">复制数据</button></div>
+            <div v-if="coordinateCheck" class="coordinate-debug-values">
+              <span>点击 {{ coordinateCheck.click.x.toFixed(0) }}, {{ coordinateCheck.click.y.toFixed(0) }}</span>
+              <span>原图 {{ coordinateCheck.source.x.toFixed(1) }}, {{ coordinateCheck.source.y.toFixed(1) }}</span>
+              <span>标记误差 <b :class="{ 'coordinate-error': coordinateCheck.actualError > 1 }">{{ coordinateCheck.actualError.toFixed(2) }} px</b></span>
+              <span>视频/SVG 层差 {{ coordinateCheck.layerMismatch.toFixed(2) }} px</span>
+              <span>旧算法误差 {{ coordinateCheck.legacyError?.toFixed(2) ?? '--' }} px</span>
+              <small>原始分辨率 {{ coordinateCheck.resolution }} · DPR {{ coordinateCheck.devicePixelRatio }} · 帧 {{ coordinateCheck.timestamp.toFixed(3) }} s</small>
+            </div>
+            <div v-else class="coordinate-debug-hint">请先点击画面中的晶圆中心</div>
+          </div>
         </div>
         <div class="modal-footer"><span>{{ calibrationPhase }}</span><div><button class="btn btn-muted" :disabled="!center" @click="resetDraft">重置</button><button class="btn btn-primary" :disabled="!readyToConfirm" @click="confirmCalibration">确认</button></div></div>
       </section>
+      <template v-if="coordinateCheckEnabled">
+        <div v-for="(marker, index) in clickMarkers" :key="index" class="raw-click-marker" :class="{ 'marker-edge': marker.kind === '边缘' }" :style="{ left: marker.x + 'px', top: marker.y + 'px' }"><span>{{ marker.kind }}点击</span></div>
+      </template>
     </div>
     <div v-if="message" class="toast" role="status">{{ message }}</div>
   </div>
