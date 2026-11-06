@@ -487,7 +487,7 @@ onBeforeUnmount(() => {
   <div class="zebo-app">
     <header class="app-header">
       <div class="brand">
-        <div class="brand-icon" aria-hidden="true"><svg viewBox="0 0 36 36"><circle cx="18" cy="18" r="12"/><circle cx="18" cy="18" r="6"/><path d="M18 2v9M18 25v9M2 18h9M25 18h9"/></svg></div>
+        <div class="brand-icon" aria-hidden="true"><img src="./favicon.ico" alt="" /></div>
         <div><div class="brand-name">ZeboVision</div><div class="brand-sub">VISION INSPECTION</div></div>
       </div>
       <div class="app-title">ZeboVision湿法清洗检测系统</div>
