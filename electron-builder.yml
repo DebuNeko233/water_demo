@@ -11,5 +11,9 @@ files:
 extraResources:
   - from: build/backend
     to: backend
+  # Keep the app's supplied ICO available outside app.asar at runtime.
+  - from: resources/icon.ico
+    to: icon.ico
 win:
+  icon: resources/icon.ico
   artifactName: ZeboVision-${version}-${arch}.${ext}
