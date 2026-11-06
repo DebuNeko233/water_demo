@@ -6,8 +6,7 @@
  * UI requests one annotated frame at a time (backpressure) and paces display
  * to source FPS. Pausing stops requests; seeking requests a new detector state.
  */
-import { onBeforeUnmount, ref, type Ref } from 'vue'
-import type { AlgorithmSettings } from '../utils/algorithm-settings.mjs'
+import { onBeforeUnmount, ref } from 'vue'
 import type { DetectionResult, WaferCalibration } from '../services/water-detection'
 import {
   openPythonVideo, readPythonVideoFrame, seekPythonVideo,
@@ -16,7 +15,7 @@ import {
 
 export type StreamStatus = 'idle' | 'connecting' | 'warming' | 'running' | 'error'
 
-export function usePythonVideoStream(settings: Readonly<Ref<AlgorithmSettings>>) {
+export function usePythonVideoStream() {
   const status = ref<StreamStatus>('idle')
   const result = ref<DetectionResult | null>(null)
   const error = ref('')
@@ -128,7 +127,7 @@ export function usePythonVideoStream(settings: Readonly<Ref<AlgorithmSettings>>)
     // response from advancing the newly opened Python VideoCapture.
     const request = commandChain.then(async () => {
       if (pendingRead) await pendingRead.catch(() => undefined)
-      return openPythonVideo(filePath, calibration, Math.max(0, timeS), settings.value)
+      return openPythonVideo(filePath, calibration, Math.max(0, timeS))
     })
     commandChain = request.then(() => undefined, () => undefined)
     try {
