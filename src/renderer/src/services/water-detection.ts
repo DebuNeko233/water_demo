@@ -32,6 +32,8 @@ export interface DetectionHistoryPoint {
 
 export interface DetectionResult {
   session_id: string
+  /** Set by the Python-owned source-video stream; not by the old frame bridge. */
+  frame_index?: number
   status: 'WARMUP' | 'OK' | 'NG'
   s_water: number
   history_ready: boolean

@@ -28,6 +28,8 @@ export interface DesktopBridge {
   }
   system: {
     selectFile(): Promise<string | null>
+    /** Native path of the user-picked File; Electron 32+ removes File.path. */
+    getPathForFile(file: File): string
     openLogs(target?: LogTarget): Promise<void>
     minimize(): Promise<void>
     toggleMaximize(): Promise<void>
