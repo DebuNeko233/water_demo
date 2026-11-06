@@ -140,20 +140,12 @@ class WaterDetectionSession:
                 raise InvalidFrame('Cannot decode image')
             if image.shape[:2] != (self._height, self._width):
                 raise InvalidFrame('Frame resolution does not match calibration')
-            # Seeking, repeated frames or a long gap must not carry over an old
-            # temporal persistence / NG state. The frontend also starts a new
-            # session on explicit seek, video switch, or recalibration.
-            if self._last_time is not None and (
-                packet.time_s <= self._last_time + 1e-5
-                or packet.time_s - self._last_time > 1.6 / self._fps
-            ):
-                # Original main1_chn.py has no reset() method: recreate it,
-                # preserving its calculations and freshly starting persistence.
-                detector = WaterDetector(
-                    (self._height, self._width), self._fps, detector.calib, self._config,
-                )
-                self._detector = detector
-                self._samples.clear()
+            # main1_chn.py calls WaterDetector.process(frame) in sequence and
+            # NEVER resets on a skipped input frame. Transport must not invent
+            # its own history/NG reset. Seek, video change and recalibration
+            # explicitly start a new session instead.
+            if self._last_time is not None and packet.time_s <= self._last_time:
+                raise InvalidFrame('Frame time must increase; start a new session after seeking')
             self._last_time = packet.time_s
             result = detector.process(image)
             s_water = float(result['s_water'])
