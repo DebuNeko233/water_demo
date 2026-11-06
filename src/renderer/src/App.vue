@@ -444,6 +444,20 @@ function jump(seconds: number): void {
 }
 function restart(): void { void detection.seek(0, true) }
 function stop(): void { detection.pause() }
+async function retryPythonVideo(): Promise<void> {
+  try {
+    await window.desktop.backend.retry()
+    if (calibration.value && activeVideoPath.value) {
+      await detection.open(activeVideoPath.value, calibration.value, currentTime.value)
+    }
+  } catch (reason) {
+    notify('Python 重连失败，请查看启动日志')
+    console.error('Retrying Python backend failed:', reason)
+  }
+}
+function openPythonStartupLogs(): void {
+  void window.desktop.system.openLogs('electron')
+}
 function windowAction(action: 'minimize' | 'toggleMaximize' | 'closeWindow'): void {
   const desktop = window.desktop
   if (!desktop?.system) return
@@ -627,7 +641,13 @@ onBeforeUnmount(() => {
             <div class="video-fit" :style="monitorViewportStyle">
               <img v-if="renderedFrame" class="video-element" :src="renderedFrame" alt="Python 逐帧推理后的检测画面"/>
             </div>
-            <div v-if="videoError" class="video-error">{{ videoError }}</div>
+            <div v-if="videoError" class="video-error">
+              <div class="video-error-message">{{ videoError }}</div>
+              <div class="video-error-actions">
+                <button class="btn btn-primary" type="button" @click="retryPythonVideo">重试连接</button>
+                <button class="btn btn-muted" type="button" @click="openPythonStartupLogs">查看启动日志</button>
+              </div>
+            </div>
           </div>
           <div class="video-footer">
             <input class="progress-range" type="range" aria-label="视频播放进度" min="0" :max="duration || 1" step="0.01" :value="shownTime" :style="{ '--progress': progress + '%' }" :disabled="!duration" @input="onMainSeek" @change="onMainSeekEnd"/>

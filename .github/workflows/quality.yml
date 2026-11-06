@@ -43,6 +43,8 @@ jobs:
             throw "The build did not reuse a persistent uv-managed Python installation"
           }
           Write-Output "Cached Python: $python"
+      - name: Validate packaged Python runtime, native extensions and MP4 decoder
+        run: node scripts/verify-runtime.mjs dist/win-unpacked/resources/backend
       - name: Smoke-test packaged Python (HTTP / WebSocket / shutdown)
         run: node scripts/smoke/backend.mjs
       - name: Smoke-test packaged Electron launcher and process cleanup

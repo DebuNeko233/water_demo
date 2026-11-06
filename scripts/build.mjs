@@ -133,13 +133,23 @@ try {
   // Python 环境准备好后再整体转为正式资源目录。
   fs.rmSync(finalBackend, { recursive: true, force: true })
   fs.renameSync(staging, finalBackend)
+  // Before Electron copies resources, validate all interpreter components,
+  // native dependencies and real MP4/AVI decoding in an isolated process.
+  run(process.execPath, ['scripts/verify-runtime.mjs', finalBackend])
   // pnpm/npm 的 exec 参数略有不同；统一执行类型检查、前端编译和打包。
   const isPnpm = (process.env.npm_config_user_agent ?? '').startsWith('pnpm/')
   const packageManager = isPnpm ? 'pnpm' : 'npm'
   const prefix = isPnpm ? ['exec'] : ['exec', '--']
   run(packageManager, ['run', 'typecheck'])
   run(packageManager, [...prefix, 'electron-vite', 'build'])
+  // Never allow previous dist contents to make an incomplete new build look
+  // complete. The only supported release is the entire win-unpacked folder.
+  fs.rmSync(path.join(root, 'dist', 'win-unpacked'), { recursive: true, force: true })
   run(packageManager, [...prefix, 'electron-builder', '--win', '--dir', '--x64'])
+  // Verify the actual files copied into the published Windows folder, not
+  // only the intermediate build/backend staging copy.
+  run(process.execPath, ['scripts/verify-runtime.mjs',
+    path.join(root, 'dist', 'win-unpacked', 'resources', 'backend')])
   console.log('Portable Windows directory: dist/win-unpacked')
 } catch (error) {
   console.error('[build] Failed:', error)
