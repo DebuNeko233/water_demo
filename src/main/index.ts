@@ -221,16 +221,17 @@ async function runPackagedSmokeTest(): Promise<void> {
     const result: unknown = await browser.webContents.executeJavaScript(
       `(() => {
         const title = document.querySelector('.app-title')?.textContent?.trim()
-        const heading = document.querySelector('.welcome-card h1')?.textContent?.trim()
-        const chooser = document.querySelector('.welcome-select')
+        const monitor = document.querySelector('.video-panel .panel-title')?.textContent?.trim()
+        const controls = [...document.querySelectorAll('.heading-actions button')]
+        const replace = controls.find(btn => btn.textContent?.trim() === '更换视频')
+        const gear = document.querySelector('button.algorithm-gear[aria-label="算法参数设置"]')
         const fileInput = document.querySelector('input[type="file"]')
         if (title !== 'ZeboVision湿法清洗检测系统' ||
-            heading !== '选择检测视频' ||
-            chooser?.textContent?.trim() !== '选择视频文件' ||
-            !fileInput) {
-          throw new Error('ZeboVision V3 entry screen not rendered')
+            monitor !== '检测画面' ||
+            !replace || !gear || !fileInput) {
+          throw new Error('ZeboVision direct-monitor entry screen not rendered')
         }
-        return 'ZeboVision V3 entry screen OK'
+        return 'ZeboVision direct-monitor entry screen OK'
       })()`,
       true,
     )
