@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { containRect, viewportToVideo, sourceViewBox } from './utils/videoGeometry.mjs'
-import { seekToReferenceFrame } from './utils/videoPlayback.mjs'
 import { svgSourceToClient } from './utils/svgCoordinates.mjs'
 import { calibrationPointerToSource } from './utils/calibrationPointer.mjs'
-import { useWaterDetection } from './composables/useWaterDetection'
+import { usePythonVideoStream } from './composables/usePythonVideoStream'
 import AlgorithmSettingsModal from './components/AlgorithmSettingsModal.vue'
 import {
   copyAlgorithmSettings, readAlgorithmSettings, storeAlgorithmSettings,
@@ -33,14 +32,14 @@ type Screen = 'welcome' | 'monitor'
 const screen = ref<Screen>('welcome')
 const fileInput = ref<HTMLInputElement | null>(null)
 const calibrationVideo = ref<HTMLVideoElement | null>(null)
-const monitorVideo = ref<HTMLVideoElement | null>(null)
 function settingsStorage(): Storage | undefined {
   try { return window.localStorage } catch { return undefined }
 }
 const algorithmSettings = ref<AlgorithmSettings>(readAlgorithmSettings(settingsStorage()))
 const algorithmSettingsOpen = ref(false)
 let settingsResumePlayback = false
-const detection = useWaterDetection(monitorVideo, algorithmSettings)
+const detection = usePythonVideoStream(algorithmSettings)
+const renderedFrame = detection.renderedFrame
 const detectorResult = detection.result
 const detectorStatus = detection.status
 const detectorError = detection.error
@@ -56,6 +55,8 @@ const calibrationBox = ref({ width: 0, height: 0 })
 const monitorBox = ref({ width: 0, height: 0 })
 const modalOpen = ref(false)
 const pendingFile = ref<File | null>(null)
+const pendingVideoPath = ref('')
+const activeVideoPath = ref('')
 const pendingUrl = ref('')
 const activeUrl = ref('')
 const activeName = ref('')
@@ -68,15 +69,17 @@ const calibrationDuration = ref(0)
 const calibrationTime = ref(0)
 const calibrationFrameTime = ref(0)
 const calibrationFrameReady = ref(false)
-const currentTime = ref(0)
-const duration = ref(0)
-const videoWidth = ref(0)
-const videoHeight = ref(0)
-const isPlaying = ref(false)
-const videoError = ref('')
+const currentTime = detection.currentTime
+const duration = detection.duration
+const videoWidth = detection.videoWidth
+const videoHeight = detection.videoHeight
+const isPlaying = detection.isPlaying
+const videoError = detection.error
 const message = ref('')
 let previouslyPlaying = false
 let resumeAt = 0
+let seekWasPlaying = false
+const seekDraft = ref<number | null>(null)
 let toastTimeout: ReturnType<typeof setTimeout> | undefined
 
 const readyToConfirm = computed(() => !!center.value && radius.value !== null && radius.value >= 20 && draftWidth.value > 0 && draftHeight.value > 0)
@@ -85,7 +88,8 @@ const draftCalibration = computed<Calibration | null>(() =>
     ? { cx: center.value.x, cy: center.value.y, radius: radius.value, width: draftWidth.value, height: draftHeight.value }
     : null,
 )
-const progress = computed(() => duration.value > 0 ? currentTime.value / duration.value * 100 : 0)
+const shownTime = computed(() => seekDraft.value ?? currentTime.value)
+const progress = computed(() => duration.value > 0 ? shownTime.value / duration.value * 100 : 0)
 const calibrationProgress = computed(() => calibrationDuration.value > 0 ? calibrationTime.value / calibrationDuration.value * 100 : 0)
 const calibrationPhase = computed(() => !center.value ? '点击晶圆中心' : radius.value === null ? '点击晶圆边缘' : '标注完成')
 const calibrationMeasure = computed(() => {
@@ -94,7 +98,6 @@ const calibrationMeasure = computed(() => {
   return radius.value === null ? `${base} · 半径 --` : `${base} · 半径 ${Math.round(radius.value)} px`
 })
 const previewUrl = computed(() => pendingUrl.value || activeUrl.value)
-const overlaySize = computed(() => sourceViewBox(videoWidth.value, videoHeight.value))
 const draftOverlaySize = computed(() => sourceViewBox(draftWidth.value, draftHeight.value))
 const detectionThreshold = computed(() => detectorResult.value?.s_water_threshold ?? algorithmSettings.value.s_water_threshold)
 const sectorThreshold = computed(() => detectorResult.value?.sector_threshold ?? algorithmSettings.value.sector_threshold)
@@ -178,19 +181,6 @@ watch(monitorStage, (node) => {
   monitorResizeObserver.observe(node)
 }, { flush: 'post' })
 
-const sectors = computed(() => {
-  const c = calibration.value
-  if (!c) return []
-  return Array.from({ length: sectorCount.value }, (_, i) => {
-    const angle = i * 2 * Math.PI / sectorCount.value
-    return {
-      x1: c.cx + c.radius * innerRadiusRatio.value * Math.cos(angle),
-      y1: c.cy + c.radius * innerRadiusRatio.value * Math.sin(angle),
-      x2: c.cx + c.radius * outerRadiusRatio.value * Math.cos(angle),
-      y2: c.cy + c.radius * outerRadiusRatio.value * Math.sin(angle),
-    }
-  })
-})
 
 function notify(text: string): void {
   message.value = text
@@ -214,7 +204,17 @@ function onFileChange(event: Event): void {
     notify('请选择视频文件')
     return
   }
+  let filePath = ''
+  try { filePath = window.desktop.system.getPathForFile(file) } catch {
+    notify('无法获取本地视频路径，请从磁盘重新选择文件')
+    return
+  }
+  if (!filePath) {
+    notify('请选择磁盘上的视频文件')
+    return
+  }
   if (pendingUrl.value) URL.revokeObjectURL(pendingUrl.value)
+  pendingVideoPath.value = filePath
   pendingFile.value = file
   pendingUrl.value = URL.createObjectURL(file)
   openCalibration(false)
@@ -228,8 +228,8 @@ function resetDraft(): void {
 function openCalibration(existing: boolean): void {
   if (modalOpen.value) return
   previouslyPlaying = isPlaying.value
-  resumeAt = monitorVideo.value?.currentTime || 0
-  monitorVideo.value?.pause()
+  resumeAt = currentTime.value
+  detection.pause()
   resetDraft()
   draftWidth.value = 0
   draftHeight.value = 0
@@ -376,109 +376,60 @@ function closeCalibration(): void {
   if (pendingUrl.value) {
     URL.revokeObjectURL(pendingUrl.value)
     pendingUrl.value = ''
+    pendingVideoPath.value = ''
     pendingFile.value = null
   }
-  if (screen.value === 'monitor' && previouslyPlaying) {
-    nextTick(() => { void monitorVideo.value?.play().catch(() => { isPlaying.value = false }) })
-  }
+  if (screen.value === 'monitor' && previouslyPlaying) detection.play()
 }
 async function confirmCalibration(): Promise<void> {
   if (!draftCalibration.value) return
   const nextCalibration = draftCalibration.value
-  // Calibration is tied to a decoded frame, not just to the video file.
   const selectedTime = calibrationVideo.value?.currentTime ?? calibrationTime.value
   calibrationFrameTime.value = Number.isFinite(selectedTime) ? selectedTime : 0
   const replacing = !!pendingFile.value
-  calibration.value = nextCalibration
   if (replacing && pendingFile.value) {
     if (activeUrl.value) URL.revokeObjectURL(activeUrl.value)
     activeUrl.value = pendingUrl.value
+    activeVideoPath.value = pendingVideoPath.value
     activeName.value = pendingFile.value.name
     pendingUrl.value = ''
+    pendingVideoPath.value = ''
     pendingFile.value = null
-    currentTime.value = 0
-    duration.value = 0
-    videoWidth.value = nextCalibration.width
-    videoHeight.value = nextCalibration.height
-    videoError.value = ''
   }
-  detection.invalidate()
+  calibration.value = nextCalibration
+  videoWidth.value = nextCalibration.width
+  videoHeight.value = nextCalibration.height
   modalOpen.value = false
   screen.value = 'monitor'
+  seekDraft.value = null
+  // Calibration preview may use the browser video decoder, but the monitoring
+  // engine opens the same original disk file directly in Python/OpenCV.
   await nextTick()
-  if (replacing && monitorVideo.value) {
-    // A new source will seek in onMainMetadata after its duration is available.
-    monitorVideo.value.load()
-  } else if (monitorVideo.value) {
-    // The existing video must show the EXACT frame that was just annotated.
-    currentTime.value = seekToReferenceFrame(monitorVideo.value, calibrationFrameTime.value)
-    isPlaying.value = false
-    if (!monitorVideo.value.seeking) void detection.start(nextCalibration)
-  }
+  await detection.open(activeVideoPath.value, nextCalibration, calibrationFrameTime.value)
 }
-function onMainFrameReady(): void {
-  // loadeddata provides an actual decoded frame even for a video that remains paused.
-  if (calibration.value && monitorVideo.value && !monitorVideo.value.seeking &&
-      detectorStatus.value === 'idle') void detection.start(calibration.value)
-}
-function onMainPlay(): void {
-  isPlaying.value = true
-  // Always retry with the currently confirmed calibration, never a previous
-  // video's geometry retained by a stale session.
-  if (calibration.value && (detectorStatus.value === 'idle' || detectorStatus.value === 'error')) {
-    void detection.start(calibration.value)
-  } else {
-    detection.onPlay()
-  }
-}
-function onMainPause(): void {
-  isPlaying.value = false
-  detection.stopCapture()
-}
-function onMainSeeking(): void {
-  detection.onSeekStart()
-}
-function onMainSeeked(): void {
-  if (calibration.value && detectorStatus.value === 'idle') void detection.start(calibration.value)
-}
-function onMainMetadata(): void {
-  const video = monitorVideo.value
-  if (!video) return
-  videoWidth.value = video.videoWidth
-  videoHeight.value = video.videoHeight
-  duration.value = Number.isFinite(video.duration) ? video.duration : 0
-  // Previously this unconditionally reset to t=0 and auto-played, so a wafer
-  // annotated at e.g. 01:12 appeared misplaced in a different frame.
-  detection.invalidate()
-  currentTime.value = seekToReferenceFrame(video, calibrationFrameTime.value)
-  isPlaying.value = false
-}
-function onMainTime(): void { currentTime.value = monitorVideo.value?.currentTime || 0 }
 function onMainSeek(event: Event): void {
-  const video = monitorVideo.value
-  if (!video || !duration.value) return
-  video.currentTime = Number((event.target as HTMLInputElement).value)
-  currentTime.value = video.currentTime
+  if (seekDraft.value === null) {
+    seekWasPlaying = isPlaying.value
+    detection.pause()
+  }
+  seekDraft.value = Number((event.target as HTMLInputElement).value)
+}
+function onMainSeekEnd(event: Event): void {
+  const seconds = Number((event.target as HTMLInputElement).value)
+  const resume = seekDraft.value !== null ? seekWasPlaying : isPlaying.value
+  seekDraft.value = null
+  void detection.seek(seconds, resume)
 }
 function togglePlay(): void {
-  const video = monitorVideo.value
-  if (!video || videoError.value) return
-  if (video.paused) void video.play().catch(() => notify('视频无法播放'))
-  else video.pause()
+  if (isPlaying.value) detection.pause()
+  else detection.play()
 }
 function jump(seconds: number): void {
-  const video = monitorVideo.value
-  if (!video || !duration.value) return
-  video.currentTime = Math.max(0, Math.min(duration.value, video.currentTime + seconds))
-  currentTime.value = video.currentTime
+  if (!duration.value) return
+  void detection.seek(Math.max(0, Math.min(duration.value, currentTime.value + seconds)))
 }
-function restart(): void {
-  if (!monitorVideo.value) return
-  monitorVideo.value.currentTime = 0
-  currentTime.value = 0
-  void monitorVideo.value.play().catch(() => notify('视频无法播放'))
-}
-function stop(): void { monitorVideo.value?.pause() }
+function restart(): void { void detection.seek(0, true) }
+function stop(): void { detection.pause() }
 function windowAction(action: 'minimize' | 'toggleMaximize' | 'closeWindow'): void {
   const desktop = window.desktop
   if (!desktop?.system) return
@@ -486,35 +437,33 @@ function windowAction(action: 'minimize' | 'toggleMaximize' | 'closeWindow'): vo
 }
 function openAlgorithmSettings(): void {
   if (screen.value !== 'monitor' || algorithmSettingsOpen.value || modalOpen.value) return
-  const video = monitorVideo.value
-  settingsResumePlayback = Boolean(video && !video.paused)
-  video?.pause()
+  settingsResumePlayback = isPlaying.value
+  detection.pause()
   algorithmSettingsOpen.value = true
 }
 function resumeAfterSettings(): void {
-  if (!settingsResumePlayback) return
+  const resume = settingsResumePlayback
   settingsResumePlayback = false
-  const video = monitorVideo.value
-  if (video) void video.play().catch(() => notify('视频无法继续播放'))
+  if (resume) detection.play()
 }
 function cancelAlgorithmSettings(): void {
   algorithmSettingsOpen.value = false
   resumeAfterSettings()
 }
-function applyAlgorithmSettings(next: AlgorithmSettings): void {
-  const values = copyAlgorithmSettings(next)
-  algorithmSettings.value = values
+async function applyAlgorithmSettings(next: AlgorithmSettings): Promise<void> {
+  algorithmSettings.value = copyAlgorithmSettings(next)
   algorithmSettingsOpen.value = false
   try {
-    storeAlgorithmSettings(settingsStorage(), values)
+    storeAlgorithmSettings(settingsStorage(), algorithmSettings.value)
     notify('算法参数已应用')
   } catch {
     notify('参数已应用，本地持久保存失败')
   }
-  // A detector's history and NG hysteresis cannot carry across configuration
-  // changes. The live video stays on the current frame while this resets.
-  if (calibration.value) void detection.start(calibration.value)
-  resumeAfterSettings()
+  const resume = settingsResumePlayback
+  settingsResumePlayback = false
+  if (calibration.value && activeVideoPath.value) {
+    await detection.open(activeVideoPath.value, calibration.value, currentTime.value, resume)
+  }
 }
 
 function onEscape(event: KeyboardEvent): void {
@@ -575,28 +524,21 @@ onBeforeUnmount(() => {
           <div class="panel-heading"><span class="panel-title">检测画面</span><div class="heading-actions"><span class="live-label">● 视频预览</span><button class="btn btn-muted" @click="editCalibration">重新标注</button><button class="btn btn-muted" @click="chooseVideo">更换视频</button></div></div>
           <div class="video-stage" ref="monitorStage">
             <div class="video-fit" :style="monitorViewportStyle">
-              <video ref="monitorVideo" class="video-element" :src="activeUrl" playsinline preload="metadata" @loadedmetadata="onMainMetadata" @loadeddata="onMainFrameReady" @timeupdate="onMainTime" @play="onMainPlay" @pause="onMainPause" @ended="onMainPause" @seeking="onMainSeeking" @seeked="onMainSeeked" @error="videoError = '视频解码失败，请更换其他格式的视频'" />
-              <svg v-if="calibration" class="roi-overlay" :viewBox="overlaySize" preserveAspectRatio="none" aria-hidden="true">
-                <circle :cx="calibration.cx" :cy="calibration.cy" :r="calibration.radius" class="wafer-outline"/>
-                <circle :cx="calibration.cx" :cy="calibration.cy" :r="calibration.radius * outerRadiusRatio" class="ring-outer"/>
-                <circle :cx="calibration.cx" :cy="calibration.cy" :r="calibration.radius * innerRadiusRatio" class="ring-inner"/>
-                <line v-for="(sector, i) in sectors" :key="i" :x1="sector.x1" :y1="sector.y1" :x2="sector.x2" :y2="sector.y2" class="sector-line" :class="{ 'sector-hot': detectorResult && detectorResult.sector_scores[i] >= sectorThreshold }"/>
-                <path :d="`M ${calibration.cx-9} ${calibration.cy} h18 M ${calibration.cx} ${calibration.cy-9} v18`" class="center-mark"/>
-              </svg>
+              <img v-if="renderedFrame" class="video-element" :src="renderedFrame" alt="Python 逐帧推理后的检测画面"/>
             </div>
             <span class="viewport-label">检测画面</span>
-            <span class="video-legend">参考帧 {{ formatTime(calibrationFrameTime) }} · 白色虚线：晶圆边缘 R　绿色：{{ outerRadiusRatio.toFixed(2) }}R　蓝色：{{ innerRadiusRatio.toFixed(2) }}R</span>
+            <span class="video-legend">参考帧 {{ formatTime(calibrationFrameTime) }} · Python/OpenCV 逐帧检测 · 红色：持续扰动区域</span>
             <div v-if="videoError" class="video-error">{{ videoError }}</div>
           </div>
           <div class="video-footer">
             <div class="timeline-header"><span>视频进度</span><span>{{ Math.round(progress) }}% 已播放</span></div>
-            <input class="progress-range" type="range" aria-label="视频播放进度" min="0" :max="duration || 1" step="0.01" :value="currentTime" :style="{ '--progress': progress + '%' }" :disabled="!duration" @input="onMainSeek"/>
-            <div class="playback"><div class="playback-left"><button title="后退 5 秒" aria-label="后退 5 秒" @click="jump(-5)">↶</button><button :title="isPlaying ? '暂停' : '播放'" :aria-label="isPlaying ? '暂停' : '播放'" @click="togglePlay">{{ isPlaying ? 'Ⅱ' : '▶' }}</button><button title="前进 5 秒" aria-label="前进 5 秒" @click="jump(5)">↷</button><span>{{ formatTime(currentTime) }} / {{ formatTime(duration) }}</span></div><span class="rate">1.0×</span></div>
+            <input class="progress-range" type="range" aria-label="视频播放进度" min="0" :max="duration || 1" step="0.01" :value="shownTime" :style="{ '--progress': progress + '%' }" :disabled="!duration" @input="onMainSeek" @change="onMainSeekEnd"/>
+            <div class="playback"><div class="playback-left"><button title="后退 5 秒" aria-label="后退 5 秒" @click="jump(-5)">↶</button><button :title="isPlaying ? '暂停' : '播放'" :aria-label="isPlaying ? '暂停' : '播放'" @click="togglePlay">{{ isPlaying ? 'Ⅱ' : '▶' }}</button><button title="前进 5 秒" aria-label="前进 5 秒" @click="jump(5)">↷</button><span>{{ formatTime(shownTime) }} / {{ formatTime(duration) }}</span></div><span class="rate">1.0×</span></div>
           </div>
         </section>
 
         <div class="right-column">
-          <section class="panel result-panel"><div><div class="data-label">当前检测结果</div><div class="status-unavailable" :class="{ 'status-good': resultStatus === 'OK', 'status-bad': resultStatus === 'NG', 'status-error': resultStatus === 'ERROR' }">{{ resultStatus }}</div><div class="status-description" :title="resultDescription">{{ resultDescription }}</div></div><div class="result-divider"/><div><div class="data-label">S_water · 当前值</div><div class="result-score">{{ detectorResult ? detectorResult.s_water.toFixed(4) : '--' }}</div><div class="data-note">原算法 · {{ analysisFPS }} FPS 抽帧</div><div class="threshold-line">阈值 <b>{{ detectionThreshold.toFixed(4) }}</b></div></div></section>
+          <section class="panel result-panel"><div><div class="data-label">当前检测结果</div><div class="status-unavailable" :class="{ 'status-good': resultStatus === 'OK', 'status-bad': resultStatus === 'NG', 'status-error': resultStatus === 'ERROR' }">{{ resultStatus }}</div><div class="status-description" :title="resultDescription">{{ resultDescription }}</div></div><div class="result-divider"/><div><div class="data-label">S_water · 当前值</div><div class="result-score">{{ detectorResult ? detectorResult.s_water.toFixed(4) : '--' }}</div><div class="data-note">原算法 · {{ analysisFPS.toFixed(2) }} FPS 原视频逐帧</div><div class="threshold-line">阈值 <b>{{ detectionThreshold.toFixed(4) }}</b></div></div></section>
           <section class="panel data-panel"><div class="panel-heading"><span class="panel-title">检测数据</span></div><div class="data-grid"><div class="metric"><div class="data-label">运行时间</div><div class="metric-value">{{ currentTime.toFixed(2) }} <small>s</small></div></div><div class="metric"><div class="data-label">S_water</div><div class="metric-value metric-blue">{{ detectorResult ? detectorResult.s_water.toFixed(4) : '--' }}</div></div><div class="metric"><div class="data-label">NG 阈值</div><div class="metric-value metric-orange">{{ detectionThreshold.toFixed(4) }}</div></div><div class="metric"><div class="data-label">异常持续时间</div><div class="metric-value">{{ detectorResult ? detectorResult.abnormal_run_s.toFixed(2) : '--' }} <small>s</small></div></div><div class="metric"><div class="data-label">异常扇区</div><div class="metric-value">{{ worstSector }}</div></div><div class="metric"><div class="data-label">扇区最大值</div><div class="metric-value">{{ detectorResult ? detectorResult.max_sector_score.toFixed(4) : '--' }}</div></div></div><div class="sector-summary"><span>检测区域</span><strong>{{ innerRadiusRatio.toFixed(2) }}R — {{ outerRadiusRatio.toFixed(2) }}R · {{ sectorCount }} 扇区</strong></div></section>
           <section class="panel chart-panel"><div class="panel-heading"><span class="panel-title">S_water 历史曲线</span><span class="chart-legend"><i/> S_water　 <b>┄</b> NG 阈值</span></div><div class="chart-body"><svg viewBox="0 0 520 140" preserveAspectRatio="none" role="img" aria-label="实时水流异常检测历史曲线"><path d="M50 18H510 M50 66H510 M50 115H510" class="chart-grid"/><path :d="`M50 ${chartThresholdY}H510`" class="chart-threshold"/><polyline v-if="chartPoints" :points="chartPoints" class="chart-series"/><text x="5" y="20">{{ chartMaximum.toFixed(3) }}</text><text x="5" :y="chartThresholdY + 2">{{ detectionThreshold.toFixed(3) }}</text><text x="5" y="118">0.000</text><text x="50" y="133">-5s</text><text x="480" y="133">当前</text><text v-if="!chartPoints" x="285" y="99" class="chart-empty">等待检测数据</text></svg></div></section>
         </div>
