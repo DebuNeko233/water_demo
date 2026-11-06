@@ -42,6 +42,9 @@ test('package, BrowserWindow and frontend favicon use the same asset', () => {
 test('top-left brand-icon displays the same uploaded ICO as favicon', () => {
   const app = readFileSync(path.join(root, 'src/renderer/src/App.vue'), 'utf8')
   const css = readFileSync(path.join(root, 'src/renderer/src/styles/zebovision.css'), 'utf8')
-  assert.match(app, /class="brand-icon"[^>]*><img src="\.\/favicon\.ico" alt=""\s*\/>/)
+  const bundlerIcon = readFileSync(path.join(root, 'src/renderer/src/assets/brand-icon.ico'))
+  assert.deepEqual(bundlerIcon, icon)
+  assert.match(app, /import brandIconUrl from '\.\/assets\/brand-icon\.ico\?url'/)
+  assert.match(app, /class="brand-icon"[^>]*><img :src="brandIconUrl" alt=""\s*\/>/)
   assert.match(css, /\.brand-icon img\s*\{[^}]*object-fit:contain/)
 })

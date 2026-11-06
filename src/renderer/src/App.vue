@@ -5,6 +5,7 @@ import { svgSourceToClient } from './utils/svgCoordinates.mjs'
 import { calibrationPointerToSource } from './utils/calibrationPointer.mjs'
 import { usePythonVideoStream } from './composables/usePythonVideoStream'
 import AlgorithmSettingsModal from './components/AlgorithmSettingsModal.vue'
+import brandIconUrl from './assets/brand-icon.ico?url'
 import {
   copyAlgorithmSettings, readAlgorithmSettings, storeAlgorithmSettings,
   type AlgorithmSettings,
@@ -487,7 +488,7 @@ onBeforeUnmount(() => {
   <div class="zebo-app">
     <header class="app-header">
       <div class="brand">
-        <div class="brand-icon" aria-hidden="true"><img src="./favicon.ico" alt="" /></div>
+        <div class="brand-icon" aria-hidden="true"><img :src="brandIconUrl" alt="" /></div>
         <div><div class="brand-name">ZeboVision</div><div class="brand-sub">VISION INSPECTION</div></div>
       </div>
       <div class="app-title">ZeboVision湿法清洗检测系统</div>
