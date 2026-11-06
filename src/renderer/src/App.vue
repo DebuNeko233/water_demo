@@ -102,7 +102,9 @@ const resultDescription = computed(() => {
 })
 const worstSector = computed(() => {
   const idx = detectorResult.value?.max_sector_idx ?? -1
-  return idx < 0 ? '--' : `${idx + 1} · ${Math.round(idx * 360 / 24)}°`
+  return idx < 0 || !detectorResult.value ||
+    detectorResult.value.max_sector_score < detectorResult.value.sector_threshold
+    ? '--' : `${idx + 1} · ${Math.round(idx * 360 / 24)}°`
 })
 const chartMaximum = computed(() => {
   const points = detectorResult.value?.history ?? []
@@ -522,7 +524,7 @@ onBeforeUnmount(() => {
                 <circle :cx="calibration.cx" :cy="calibration.cy" :r="calibration.radius" class="wafer-outline"/>
                 <circle :cx="calibration.cx" :cy="calibration.cy" :r="calibration.radius * .95" class="ring-outer"/>
                 <circle :cx="calibration.cx" :cy="calibration.cy" :r="calibration.radius * .65" class="ring-inner"/>
-                <line v-for="(sector, i) in sectors" :key="i" :x1="sector.x1" :y1="sector.y1" :x2="sector.x2" :y2="sector.y2" class="sector-line" :class="{ 'sector-hot': detectorResult && detectorResult.sector_scores[i] >= 0.05 }"/>
+                <line v-for="(sector, i) in sectors" :key="i" :x1="sector.x1" :y1="sector.y1" :x2="sector.x2" :y2="sector.y2" class="sector-line" :class="{ 'sector-hot': detectorResult && detectorResult.sector_scores[i] >= detectorResult.sector_threshold }"/>
                 <path :d="`M ${calibration.cx-9} ${calibration.cy} h18 M ${calibration.cx} ${calibration.cy-9} v18`" class="center-mark"/>
               </svg>
             </div>

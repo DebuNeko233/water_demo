@@ -129,6 +129,7 @@ class WaterDetectionSession:
                 's_water': s_water,
                 'history_ready': bool(result['history_ready']),
                 's_water_threshold': self._config.s_water_threshold,
+                'sector_threshold': self._config.sector_threshold,
                 'max_sector_idx': int(result['max_sector_idx']),
                 'max_sector_score': float(result['max_sector_score']),
                 'sector_scores': [float(x) for x in result['sector_scores']],

@@ -31,6 +31,7 @@ export interface DetectionResult {
   s_water: number
   history_ready: boolean
   s_water_threshold: number
+  sector_threshold: number
   max_sector_idx: number
   max_sector_score: number
   sector_scores: number[]
