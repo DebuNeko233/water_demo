@@ -30,17 +30,17 @@ class CalibrationInput(BaseModel):
 
 class DetectorSettings(BaseModel):
     """Editable numeric subset of the original DemoConfig (8 FPS is fixed)."""
-    inner_radius_ratio: float = Field(0.65, ge=0.05, le=1.5, allow_inf_nan=False)
-    outer_radius_ratio: float = Field(0.95, ge=0.05, le=1.5, allow_inf_nan=False)
-    diff_threshold: float = Field(8.0, ge=0.0, le=255.0, allow_inf_nan=False)
-    history_seconds: float = Field(0.50, ge=0.125, le=3.0, allow_inf_nan=False)
-    persistence_threshold: float = Field(0.50, ge=0.0, le=1.0, allow_inf_nan=False)
-    s_water_threshold: float = Field(0.025, ge=0.0, le=1.0, allow_inf_nan=False)
-    ng_hold_seconds: float = Field(0.50, ge=0.0, le=30.0, allow_inf_nan=False)
-    recover_hold_seconds: float = Field(0.60, ge=0.0, le=30.0, allow_inf_nan=False)
-    sector_count: int = Field(24, ge=4, le=72)
-    sector_threshold: float = Field(0.05, ge=0.0, le=1.0, allow_inf_nan=False)
-    blur_ksize: int = Field(3, ge=0, le=15)
+    inner_radius_ratio: float = Field(DemoConfig.inner_radius_ratio, ge=0.05, le=1.5, allow_inf_nan=False)
+    outer_radius_ratio: float = Field(DemoConfig.outer_radius_ratio, ge=0.05, le=1.5, allow_inf_nan=False)
+    diff_threshold: float = Field(DemoConfig.diff_threshold, ge=0.0, le=255.0, allow_inf_nan=False)
+    history_seconds: float = Field(DemoConfig.history_seconds, ge=0.125, le=3.0, allow_inf_nan=False)
+    persistence_threshold: float = Field(DemoConfig.persistence_threshold, ge=0.0, le=1.0, allow_inf_nan=False)
+    s_water_threshold: float = Field(DemoConfig.s_water_threshold, ge=0.0, le=1.0, allow_inf_nan=False)
+    ng_hold_seconds: float = Field(DemoConfig.ng_hold_seconds, ge=0.0, le=30.0, allow_inf_nan=False)
+    recover_hold_seconds: float = Field(DemoConfig.recover_hold_seconds, ge=0.0, le=30.0, allow_inf_nan=False)
+    sector_count: int = Field(DemoConfig.sector_count, ge=4, le=72)
+    sector_threshold: float = Field(DemoConfig.sector_threshold, ge=0.0, le=1.0, allow_inf_nan=False)
+    blur_ksize: int = Field(DemoConfig.blur_ksize, ge=0, le=15)
 
     @model_validator(mode='after')
     def check_geometry_and_blur(self):
