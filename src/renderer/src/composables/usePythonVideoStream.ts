@@ -29,6 +29,7 @@ export function usePythonVideoStream(settings: Readonly<Ref<AlgorithmSettings>>)
   const videoHeight = ref(0)
   const isPlaying = ref(false)
   let sessionId: string | null = null
+  let reachedEnd = false
   let version = 0
   let timer: ReturnType<typeof setTimeout> | null = null
   let pendingRead: Promise<AnnotatedFrame> | null = null
@@ -44,6 +45,7 @@ export function usePythonVideoStream(settings: Readonly<Ref<AlgorithmSettings>>)
     pause()
     version += 1
     sessionId = null
+    reachedEnd = false
     status.value = 'idle'
     result.value = null
     records.value = []
@@ -51,11 +53,18 @@ export function usePythonVideoStream(settings: Readonly<Ref<AlgorithmSettings>>)
     error.value = ''
   }
 
-  function showFrame(packet: AnnotatedFrame): void {
+  async function showFrame(packet: AnnotatedFrame, expectedVersion: number): Promise<void> {
     if (packet.ended || !packet.jpeg_base64 || !packet.result ||
         packet.time_s === undefined) return
-    // The image and its metadata are one atomic response from Python.
-    renderedFrame.value = 'data:image/jpeg;base64,' + packet.jpeg_base64
+    const uri = 'data:image/jpeg;base64,' + packet.jpeg_base64
+    // Decode before advancing both the image and its related metrics.
+    // Otherwise the <img> could still show the previous frame during the
+    // browser's asynchronous JPEG decode, despite newer S_water data.
+    const ready = new Image()
+    ready.src = uri
+    await ready.decode()
+    if (expectedVersion !== version) return
+    renderedFrame.value = uri
     result.value = packet.result
     currentTime.value = packet.time_s
     records.value.push(packet.result)
@@ -65,6 +74,10 @@ export function usePythonVideoStream(settings: Readonly<Ref<AlgorithmSettings>>)
 
   function play(): void {
     if (isPlaying.value || !sessionId || status.value === 'error' || status.value === 'connecting') return
+    if (reachedEnd) {
+      void seek(0, true)
+      return
+    }
     isPlaying.value = true
     schedule(version, 1000 / Math.max(1, sourceFrameRate.value))
   }
@@ -87,10 +100,12 @@ export function usePythonVideoStream(settings: Readonly<Ref<AlgorithmSettings>>)
       const packet = await reading
       if (version !== expectedVersion || sid !== sessionId) return
       if (packet.ended) {
+        reachedEnd = true
+        currentTime.value = duration.value
         pause()
         return
       }
-      showFrame(packet)
+      await showFrame(packet, expectedVersion)
       schedule(expectedVersion, 1000 / Math.max(1, sourceFrameRate.value) - (performance.now() - started))
     } catch (reason) {
       if (version !== expectedVersion) return
@@ -124,8 +139,8 @@ export function usePythonVideoStream(settings: Readonly<Ref<AlgorithmSettings>>)
       duration.value = session.duration_s
       videoWidth.value = session.width
       videoHeight.value = session.height
-      showFrame(session.frame)
-      if (autoplay) play()
+      await showFrame(session.frame, epoch)
+      if (epoch === version && autoplay) play()
     } catch (reason) {
       if (epoch !== version) return
       status.value = 'error'
@@ -140,6 +155,7 @@ export function usePythonVideoStream(settings: Readonly<Ref<AlgorithmSettings>>)
     version += 1
     const epoch = version
     status.value = 'connecting'
+    reachedEnd = false
     const request = commandChain.then(async () => {
       if (pendingRead) await pendingRead.catch(() => undefined)
       return seekPythonVideo(sid, Math.max(0, Math.min(duration.value || timeS, timeS)))
@@ -150,8 +166,8 @@ export function usePythonVideoStream(settings: Readonly<Ref<AlgorithmSettings>>)
       if (epoch !== version) return
       result.value = null
       records.value = []
-      showFrame(packet)
-      if (resume) play()
+      await showFrame(packet, epoch)
+      if (epoch === version && resume) play()
     } catch (reason) {
       if (epoch !== version) return
       status.value = 'error'
