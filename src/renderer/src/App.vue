@@ -30,7 +30,7 @@ type CoordinateCheck = {
 type ClickMarker = { x: number; y: number; kind: '中心' | '边缘' }
 
 type Screen = 'welcome' | 'monitor'
-const screen = ref<Screen>('welcome')
+const screen = ref<Screen>('monitor')
 const fileInput = ref<HTMLInputElement | null>(null)
 const calibrationVideo = ref<HTMLVideoElement | null>(null)
 function settingsStorage(): Storage | undefined {
