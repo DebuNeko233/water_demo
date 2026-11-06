@@ -42,7 +42,13 @@ export interface DetectionResult {
 
 export async function beginDetection(calibration: WaferCalibration): Promise<DetectionSession> {
   return window.desktop.backend.request<DetectionSession>('POST', '/api/detection/start', {
-    calibration,
+    calibration: {
+      cx: calibration.cx,
+      cy: calibration.cy,
+      radius: calibration.radius,
+      width: calibration.width,
+      height: calibration.height,
+    },
     sample_fps: ANALYSIS_FPS,
   })
 }
