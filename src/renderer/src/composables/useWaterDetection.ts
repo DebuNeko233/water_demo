@@ -53,7 +53,14 @@ export function useWaterDetection(videoRef: Ref<HTMLVideoElement | null>) {
 
   async function start(calibration: WaferCalibration): Promise<void> {
     invalidate()
-    currentCalibration = { ...calibration }
+    const snapshot: WaferCalibration = {
+      cx: calibration.cx,
+      cy: calibration.cy,
+      radius: calibration.radius,
+      width: calibration.width,
+      height: calibration.height,
+    }
+    currentCalibration = snapshot
     const version = epoch
     status.value = 'connecting'
     if (!context) {
@@ -62,7 +69,7 @@ export function useWaterDetection(videoRef: Ref<HTMLVideoElement | null>) {
       return
     }
     try {
-      const pendingStart = startChain.then(() => beginDetection(calibration))
+      const pendingStart = startChain.then(() => beginDetection(snapshot))
       startChain = pendingStart.then(() => undefined, () => undefined)
       const session = await pendingStart
       if (version !== epoch) return
