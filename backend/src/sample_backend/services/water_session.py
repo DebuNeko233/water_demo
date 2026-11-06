@@ -130,9 +130,9 @@ class WaterDetectionSession:
                 raw = base64.b64decode(packet.png_base64 or packet.jpeg_base64 or '', validate=True)
             except (ValueError, binascii.Error) as exc:
                 raise InvalidFrame('Invalid image base64 data') from exc
-            if packet.png_base64 is not None and not raw.startswith(b'\\x89PNG\\r\\n\\x1a\\n'):
+            if packet.png_base64 is not None and not raw.startswith(b'\x89PNG\r\n\x1a\n'):
                 raise InvalidFrame('Expected lossless PNG image')
-            if packet.jpeg_base64 is not None and not raw.startswith(b'\\xff\\xd8'):
+            if packet.jpeg_base64 is not None and not raw.startswith(b'\xff\xd8'):
                 raise InvalidFrame('Expected JPEG image')
             encoded = np.frombuffer(raw, dtype=np.uint8)
             image = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
