@@ -176,6 +176,7 @@ class PythonVideoStream:
             'jpeg_base64': base64.b64encode(encoded).decode('ascii'),
             'result': {
                 'session_id': self._id,
+                'frame_index': index,
                 'status': data['status'],
                 's_water': float(data['s_water']),
                 'history_ready': bool(data['history_ready']),
