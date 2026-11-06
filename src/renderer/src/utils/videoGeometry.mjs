@@ -36,3 +36,14 @@ export function viewportToVideo(clientX, clientY, rect, videoWidth, videoHeight)
   if (x < 0 || x > videoWidth || y < 0 || y > videoHeight) return null
   return { x, y }
 }
+
+/**
+ * SVG viewBox requires four values: min-x, min-y, width, height.
+ * Using only "width height" invalidates the viewBox and causes source-pixel
+ * centers to render offset from the cursor when the video is scaled.
+ */
+export function sourceViewBox(width, height) {
+  const w = Number.isFinite(width) && width > 0 ? width : 1
+  const h = Number.isFinite(height) && height > 0 ? height : 1
+  return `0 0 ${w} ${h}`
+}

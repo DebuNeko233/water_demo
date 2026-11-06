@@ -7,3 +7,5 @@ export function clientToVideo(clientX: number, clientY: number,
 export function viewportToVideo(clientX: number, clientY: number,
   rect: { left: number; top: number; width: number; height: number },
   videoWidth: number, videoHeight: number): VideoPoint | null
+
+export function sourceViewBox(width: number, height: number): string

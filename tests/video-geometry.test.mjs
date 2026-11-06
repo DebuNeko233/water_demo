@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { containRect, clientToVideo, viewportToVideo } from '../src/renderer/src/utils/videoGeometry.mjs'
+import { containRect, clientToVideo, viewportToVideo, sourceViewBox } from '../src/renderer/src/utils/videoGeometry.mjs'
 
 test('16:9 video in wide calibration box maps center and edge to source pixels', () => {
   const box = { left: 30, top: 80, width: 960, height: 460 }
@@ -49,4 +49,13 @@ test('calibration pointer and ROI use the same fitted viewport for any aspect ra
     }
     assert.equal(viewportToVideo(frame.left-5,frame.top+frame.height/2,frame,vw,vh),null)
   }
+})
+
+test('SVG viewBox has the required x y width height values for both calibration and monitor', () => {
+  for (const [width,height] of [[720,576],[1920,1080],[1080,1920]]) {
+    const viewBox = sourceViewBox(width,height)
+    const values = viewBox.split(/\\s+/).map(Number)
+    assert.deepEqual(values, [0,0,width,height])
+  }
+  assert.equal(sourceViewBox(0,0),'0 0 1 1')
 })

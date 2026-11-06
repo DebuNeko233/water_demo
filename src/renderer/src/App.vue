@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { containRect, viewportToVideo } from './utils/videoGeometry.mjs'
+import { containRect, viewportToVideo, sourceViewBox } from './utils/videoGeometry.mjs'
 import { seekToReferenceFrame } from './utils/videoPlayback.mjs'
 import { svgSourceToClient } from './utils/svgCoordinates.mjs'
 import { calibrationPointerToSource } from './utils/calibrationPointer.mjs'
@@ -76,8 +76,8 @@ const calibrationMeasure = computed(() => {
   return radius.value === null ? `${base} · 半径 --` : `${base} · 半径 ${Math.round(radius.value)} px`
 })
 const previewUrl = computed(() => pendingUrl.value || activeUrl.value)
-const overlaySize = computed(() => `${videoWidth.value || 1} ${videoHeight.value || 1}`)
-const draftOverlaySize = computed(() => `${draftWidth.value || 1} ${draftHeight.value || 1}`)
+const overlaySize = computed(() => sourceViewBox(videoWidth.value, videoHeight.value))
+const draftOverlaySize = computed(() => sourceViewBox(draftWidth.value, draftHeight.value))
 
 function fittedViewportStyle(box: { width: number; height: number }, width: number, height: number): Record<string, string> {
   const rect = containRect(box.width, box.height, width, height)
