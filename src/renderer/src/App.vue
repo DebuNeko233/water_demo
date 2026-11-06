@@ -2,7 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { containRect, viewportToVideo } from './utils/videoGeometry.mjs'
 import { seekToReferenceFrame } from './utils/videoPlayback.mjs'
-import { svgClientToSource, svgSourceToClient } from './utils/svgCoordinates.mjs'
+import { svgSourceToClient } from './utils/svgCoordinates.mjs'
+import { calibrationPointerToSource } from './utils/calibrationPointer.mjs'
 
 type Point = { x: number; y: number }
 type Calibration = { cx: number; cy: number; radius: number; width: number; height: number }
@@ -17,6 +18,7 @@ type CoordinateCheck = {
   viewportRect: string
   resolution: string
   devicePixelRatio: number
+  method: 'svg' | 'viewport'
   timestamp: number
 }
 type ClickMarker = { x: number; y: number; kind: '中心' | '边缘' }
@@ -59,7 +61,7 @@ let previouslyPlaying = false
 let resumeAt = 0
 let toastTimeout: ReturnType<typeof setTimeout> | undefined
 
-const readyToConfirm = computed(() => calibrationFrameReady.value && !!center.value && radius.value !== null && radius.value >= 20 && draftWidth.value > 0)
+const readyToConfirm = computed(() => !!center.value && radius.value !== null && radius.value >= 20 && draftWidth.value > 0 && draftHeight.value > 0)
 const draftCalibration = computed<Calibration | null>(() =>
   readyToConfirm.value && center.value && radius.value !== null
     ? { cx: center.value.x, cy: center.value.y, radius: radius.value, width: draftWidth.value, height: draftHeight.value }
@@ -225,21 +227,31 @@ function formatRect(rect: DOMRect | undefined): string {
     : 'N/A'
 }
 function onCalibrationClick(event: MouseEvent): void {
-  const svg = calibrationSvg.value
-  if (!modalOpen.value || !calibrationFrameReady.value || !draftWidth.value || !draftHeight.value ||
-      calibrationVideo.value?.seeking || !svg) return
-
-  // Map the pointer through the *actual SVG transformation* used to paint the
-  // crosshair. This avoids independent CSS-rectangle assumptions.
-  const point = svgClientToSource(svg, event.clientX, event.clientY)
-  if (!point) return
+  if (!modalOpen.value) return
+  // Metadata is sufficient for coordinate entry. Requiring loadeddata or
+  // HAVE_CURRENT_DATA here could silently disable all clicks for files whose
+  // browser preload stops after metadata.
+  if (!draftWidth.value || !draftHeight.value) {
+    notify('视频尚未读取到画面尺寸，请稍后重试')
+    return
+  }
 
   const boxRect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+  const svg = calibrationSvg.value
+  const mapped = calibrationPointerToSource(
+    svg, event.clientX, event.clientY, boxRect,
+    draftWidth.value, draftHeight.value,
+  )
+  if (!mapped) {
+    notify('点击位置不在视频画面内，请在画面上点击')
+    return
+  }
+  const point = mapped.point
   const videoRect = calibrationVideo.value?.getBoundingClientRect()
-  const svgRect = svg.getBoundingClientRect()
+  const svgRect = svg?.getBoundingClientRect()
   const oldPoint = viewportToVideo(event.clientX, event.clientY, boxRect, draftWidth.value, draftHeight.value)
-  const projected = svgSourceToClient(svg, point.x, point.y)
-  const legacyProjected = oldPoint ? svgSourceToClient(svg, oldPoint.x, oldPoint.y) : null
+  const projected = svg ? svgSourceToClient(svg, point.x, point.y) : null
+  const legacyProjected = svg && oldPoint ? svgSourceToClient(svg, oldPoint.x, oldPoint.y) : null
 
   if (coordinateCheckEnabled.value) {
     coordinateCheck.value = {
@@ -248,7 +260,7 @@ function onCalibrationClick(event: MouseEvent): void {
       actualError: projected ? Math.hypot(projected.x - event.clientX, projected.y - event.clientY) : NaN,
       legacyError: legacyProjected
         ? Math.hypot(legacyProjected.x - event.clientX, legacyProjected.y - event.clientY) : null,
-      layerMismatch: videoRect ? Math.max(
+      layerMismatch: videoRect && svgRect ? Math.max(
         Math.abs(videoRect.left - svgRect.left), Math.abs(videoRect.top - svgRect.top),
         Math.abs(videoRect.width - svgRect.width), Math.abs(videoRect.height - svgRect.height),
       ) : NaN,
@@ -257,10 +269,9 @@ function onCalibrationClick(event: MouseEvent): void {
       viewportRect: formatRect(boxRect),
       resolution: `${draftWidth.value}×${draftHeight.value}`,
       devicePixelRatio: window.devicePixelRatio,
+      method: mapped.method,
       timestamp: calibrationVideo.value?.currentTime ?? 0,
     }
-    // Real mouse positions are rendered by HTML in screen pixels, completely
-    // independently of the SVG coordinate system.
     if (radius.value === null) {
       clickMarkers.value = [...clickMarkers.value,
         { x: event.clientX, y: event.clientY, kind: center.value ? '边缘' : '中心' }]
@@ -289,7 +300,7 @@ async function copyCoordinateCheck(): Promise<void> {
     `鼠标(client): ${result.click.x.toFixed(2)}, ${result.click.y.toFixed(2)}`,
     `SVG原图像素: ${result.source.x.toFixed(2)}, ${result.source.y.toFixed(2)}`,
     `SVG绘制偏差: ${result.actualError.toFixed(3)}px; 旧映射偏差: ${result.legacyError?.toFixed(3) ?? 'N/A'}px`,
-    `视频/SVG盒差: ${result.layerMismatch.toFixed(3)}px`,
+    `映射方式: ${result.method}; 视频/SVG盒差: ${result.layerMismatch.toFixed(3)}px`,
     `视频矩形: ${result.videoRect}`,
     `SVG矩形: ${result.svgRect}`,
     `点击层矩形: ${result.viewportRect}`,
@@ -478,7 +489,7 @@ onBeforeUnmount(() => {
               <span>原图 {{ coordinateCheck.source.x.toFixed(1) }}, {{ coordinateCheck.source.y.toFixed(1) }}</span>
               <span>标记误差 <b :class="{ 'coordinate-error': coordinateCheck.actualError > 1 }">{{ coordinateCheck.actualError.toFixed(2) }} px</b></span>
               <span>视频/SVG 层差 {{ coordinateCheck.layerMismatch.toFixed(2) }} px</span>
-              <span>旧算法误差 {{ coordinateCheck.legacyError?.toFixed(2) ?? '--' }} px</span>
+              <span>映射 {{ coordinateCheck.method === 'svg' ? 'SVG 矩阵' : '显示区回退' }}</span><span>旧算法误差 {{ coordinateCheck.legacyError?.toFixed(2) ?? '--' }} px</span>
               <small>原始分辨率 {{ coordinateCheck.resolution }} · DPR {{ coordinateCheck.devicePixelRatio }} · 帧 {{ coordinateCheck.timestamp.toFixed(3) }} s</small>
             </div>
             <div v-else class="coordinate-debug-hint">请先点击画面中的晶圆中心</div>
