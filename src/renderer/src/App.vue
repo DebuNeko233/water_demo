@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { containRect, viewportToVideo } from './utils/videoGeometry.mjs'
+import { seekToReferenceFrame } from './utils/videoPlayback.mjs'
 
 type Point = { x: number; y: number }
 type Calibration = { cx: number; cy: number; radius: number; width: number; height: number }
@@ -26,6 +27,8 @@ const draftWidth = ref(0)
 const draftHeight = ref(0)
 const calibrationDuration = ref(0)
 const calibrationTime = ref(0)
+const calibrationFrameTime = ref(0)
+const calibrationFrameReady = ref(false)
 const currentTime = ref(0)
 const duration = ref(0)
 const videoWidth = ref(0)
@@ -37,7 +40,7 @@ let previouslyPlaying = false
 let resumeAt = 0
 let toastTimeout: ReturnType<typeof setTimeout> | undefined
 
-const readyToConfirm = computed(() => !!center.value && radius.value !== null && radius.value >= 20 && draftWidth.value > 0)
+const readyToConfirm = computed(() => calibrationFrameReady.value && !!center.value && radius.value !== null && radius.value >= 20 && draftWidth.value > 0)
 const draftCalibration = computed<Calibration | null>(() =>
   readyToConfirm.value && center.value && radius.value !== null
     ? { cx: center.value.x, cy: center.value.y, radius: radius.value, width: draftWidth.value, height: draftHeight.value }
@@ -150,6 +153,7 @@ function openCalibration(existing: boolean): void {
   draftHeight.value = 0
   calibrationDuration.value = 0
   calibrationTime.value = 0
+  calibrationFrameReady.value = false
   if (existing && calibration.value) {
     center.value = { x: calibration.value.cx, y: calibration.value.cy }
     radius.value = calibration.value.radius
@@ -167,6 +171,7 @@ function editCalibration(): void {
 function onCalibrationMetadata(): void {
   const video = calibrationVideo.value
   if (!video) return
+  calibrationFrameReady.value = false
   draftWidth.value = video.videoWidth
   draftHeight.value = video.videoHeight
   calibrationDuration.value = Number.isFinite(video.duration) ? video.duration : 0
@@ -180,15 +185,21 @@ function onCalibrationMetadata(): void {
 function onCalibrationTime(): void {
   calibrationTime.value = calibrationVideo.value?.currentTime || 0
 }
+function onCalibrationFrameReady(): void {
+  const video = calibrationVideo.value
+  calibrationFrameReady.value = !!video &&
+    video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && !video.seeking
+}
 function onCalibrationSeek(event: Event): void {
   const v = calibrationVideo.value
   if (!v || !calibrationDuration.value) return
+  calibrationFrameReady.value = false
   v.currentTime = Number((event.target as HTMLInputElement).value)
   calibrationTime.value = v.currentTime
   resetDraft()
 }
 function onCalibrationClick(event: MouseEvent): void {
-  if (!modalOpen.value || !draftWidth.value || !draftHeight.value || radius.value !== null) return
+  if (!modalOpen.value || !calibrationFrameReady.value || !draftWidth.value || !draftHeight.value || radius.value !== null || calibrationVideo.value?.seeking) return
   // The click target is already the fitted image: it contains no black bars.
   const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
   const point = viewportToVideo(event.clientX, event.clientY, rect, draftWidth.value, draftHeight.value)
@@ -216,6 +227,9 @@ function closeCalibration(): void {
 async function confirmCalibration(): Promise<void> {
   if (!draftCalibration.value) return
   const nextCalibration = draftCalibration.value
+  // Calibration is tied to a decoded frame, not just to the video file.
+  const selectedTime = calibrationVideo.value?.currentTime ?? calibrationTime.value
+  calibrationFrameTime.value = Number.isFinite(selectedTime) ? selectedTime : 0
   const replacing = !!pendingFile.value
   calibration.value = nextCalibration
   if (replacing && pendingFile.value) {
@@ -234,9 +248,12 @@ async function confirmCalibration(): Promise<void> {
   screen.value = 'monitor'
   await nextTick()
   if (replacing && monitorVideo.value) {
+    // A new source will seek in onMainMetadata after its duration is available.
     monitorVideo.value.load()
-  } else if (previouslyPlaying) {
-    void monitorVideo.value?.play().catch(() => { isPlaying.value = false })
+  } else if (monitorVideo.value) {
+    // The existing video must show the EXACT frame that was just annotated.
+    currentTime.value = seekToReferenceFrame(monitorVideo.value, calibrationFrameTime.value)
+    isPlaying.value = false
   }
 }
 function onMainMetadata(): void {
@@ -245,8 +262,10 @@ function onMainMetadata(): void {
   videoWidth.value = video.videoWidth
   videoHeight.value = video.videoHeight
   duration.value = Number.isFinite(video.duration) ? video.duration : 0
-  video.currentTime = 0
-  void video.play().catch(() => { isPlaying.value = false })
+  // Previously this unconditionally reset to t=0 and auto-played, so a wafer
+  // annotated at e.g. 01:12 appeared misplaced in a different frame.
+  currentTime.value = seekToReferenceFrame(video, calibrationFrameTime.value)
+  isPlaying.value = false
 }
 function onMainTime(): void { currentTime.value = monitorVideo.value?.currentTime || 0 }
 function onMainSeek(event: Event): void {
@@ -338,7 +357,7 @@ onBeforeUnmount(() => {
               </svg>
             </div>
             <span class="viewport-label">检测画面</span>
-            <span class="video-legend">灰色虚线：晶圆边缘 R　绿色：0.95R　蓝色：0.65R</span>
+            <span class="video-legend">参考帧 {{ formatTime(calibrationFrameTime) }} · 白色虚线：晶圆边缘 R　绿色：0.95R　蓝色：0.65R</span>
             <div v-if="videoError" class="video-error">{{ videoError }}</div>
           </div>
           <div class="video-footer">
@@ -361,7 +380,7 @@ onBeforeUnmount(() => {
     <div v-if="modalOpen" class="modal-mask" @click.self="closeCalibration">
       <section class="calibration-modal" role="dialog" aria-modal="true" aria-labelledby="calibration-title">
         <div class="modal-header"><div><h2 id="calibration-title">标注晶圆位置</h2><p>点击画面中的晶圆中心，再点击晶圆边缘</p></div><button type="button" class="modal-close" title="取消标注" aria-label="取消标注" @click="closeCalibration">×</button></div>
-        <div class="modal-body"><div ref="calibrationStage" class="calibration-stage" :class="{ 'stage-ready': !!draftWidth }"><div class="video-fit calibration-fit" :style="calibrationViewportStyle" @click="onCalibrationClick"><video ref="calibrationVideo" :src="previewUrl" playsinline muted preload="metadata" @loadedmetadata="onCalibrationMetadata" @timeupdate="onCalibrationTime" @error="notify('无法读取视频，请尝试其他格式')"/><svg class="roi-overlay" :viewBox="draftOverlaySize" preserveAspectRatio="none" aria-hidden="true"><template v-if="center"><path :d="`M ${center.x-13} ${center.y} h26 M ${center.x} ${center.y-13} v26`" class="calib-cross"/><circle :cx="center.x" :cy="center.y" r="4" fill="#59d7ff"/></template><template v-if="draftCalibration"><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius" class="calib-wafer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * .95" class="ring-outer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * .65" class="ring-inner"/></template></svg></div><div class="frame-label">灰色虚线：晶圆边缘 R　绿色：0.95R　蓝色：0.65R</div></div>
+        <div class="modal-body"><div ref="calibrationStage" class="calibration-stage" :class="{ 'stage-ready': !!draftWidth }"><div class="video-fit calibration-fit" :style="calibrationViewportStyle" @click="onCalibrationClick"><video ref="calibrationVideo" :src="previewUrl" playsinline muted preload="metadata" @loadedmetadata="onCalibrationMetadata" @loadeddata="onCalibrationFrameReady" @timeupdate="onCalibrationTime" @seeking="calibrationFrameReady = false" @seeked="onCalibrationFrameReady" @error="notify('无法读取视频，请尝试其他格式')"/><svg class="roi-overlay" :viewBox="draftOverlaySize" preserveAspectRatio="none" aria-hidden="true"><template v-if="center"><path :d="`M ${center.x-13} ${center.y} h26 M ${center.x} ${center.y-13} v26`" class="calib-cross"/><circle :cx="center.x" :cy="center.y" r="4" fill="#59d7ff"/></template><template v-if="draftCalibration"><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius" class="calib-wafer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * .95" class="ring-outer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * .65" class="ring-inner"/></template></svg></div><div class="frame-label">灰色虚线：晶圆边缘 R　绿色：0.95R　蓝色：0.65R</div></div>
           <div class="calib-timeline"><span>定位画面</span><input type="range" aria-label="标注画面位置" min="0" :max="calibrationDuration || 1" step="0.01" :value="calibrationTime" :style="{ '--progress': calibrationProgress + '%' }" :disabled="!calibrationDuration" @input="onCalibrationSeek"/><span>{{ formatTime(calibrationTime) }} / {{ formatTime(calibrationDuration) }}</span></div>
           <div class="calibration-status"><strong>{{ calibrationPhase }}</strong><span>{{ calibrationMeasure }}</span></div>
         </div>
