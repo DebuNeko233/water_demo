@@ -4,6 +4,7 @@ import { containRect, viewportToVideo, sourceViewBox } from './utils/videoGeomet
 import { seekToReferenceFrame } from './utils/videoPlayback.mjs'
 import { svgSourceToClient } from './utils/svgCoordinates.mjs'
 import { calibrationPointerToSource } from './utils/calibrationPointer.mjs'
+import { useWaterDetection } from './composables/useWaterDetection'
 
 type Point = { x: number; y: number }
 type Calibration = { cx: number; cy: number; radius: number; width: number; height: number }
@@ -28,6 +29,12 @@ const screen = ref<Screen>('welcome')
 const fileInput = ref<HTMLInputElement | null>(null)
 const calibrationVideo = ref<HTMLVideoElement | null>(null)
 const monitorVideo = ref<HTMLVideoElement | null>(null)
+const detection = useWaterDetection(monitorVideo)
+const detectorResult = detection.result
+const detectorStatus = detection.status
+const detectorError = detection.error
+const detectionRecords = detection.records
+const analysisFPS = detection.sourceFrameRate
 const calibrationStage = ref<HTMLElement | null>(null)
 const calibrationSvg = ref<SVGSVGElement | null>(null)
 const coordinateCheckEnabled = ref(true)
@@ -78,6 +85,41 @@ const calibrationMeasure = computed(() => {
 const previewUrl = computed(() => pendingUrl.value || activeUrl.value)
 const overlaySize = computed(() => sourceViewBox(videoWidth.value, videoHeight.value))
 const draftOverlaySize = computed(() => sourceViewBox(draftWidth.value, draftHeight.value))
+const detectionThreshold = computed(() => detectorResult.value?.s_water_threshold ?? 0.025)
+const resultStatus = computed(() => {
+  if (detectorStatus.value === 'error') return 'ERROR'
+  if (detectorStatus.value === 'connecting') return '连接中'
+  if (detectorStatus.value === 'idle') return '--'
+  return detectorResult.value?.status ?? 'WARMUP'
+})
+const resultDescription = computed(() => {
+  if (detectorStatus.value === 'error') return detectorError.value
+  if (detectorStatus.value === 'connecting') return '正在连接 Python 检测服务'
+  if (detectorStatus.value === 'idle') return '播放视频后开始检测'
+  if (resultStatus.value === 'WARMUP') return '正在累积帧差与驻留窗口'
+  if (resultStatus.value === 'NG') return '检测到持续水流异常'
+  return '水流检测正常'
+})
+const worstSector = computed(() => {
+  const idx = detectorResult.value?.max_sector_idx ?? -1
+  return idx < 0 ? '--' : `${idx + 1} · ${Math.round(idx * 360 / 24)}°`
+})
+const chartMaximum = computed(() => {
+  const points = detectorResult.value?.history ?? []
+  return Math.max(0.05, detectionThreshold.value * 1.4,
+    ...points.map(point => point.s_water * 1.15))
+})
+const chartThresholdY = computed(() => 115 - detectionThreshold.value / chartMaximum.value * 97)
+const chartPoints = computed(() => {
+  const samples = detectorResult.value?.history ?? []
+  if (!samples.length) return ''
+  const rightTime = samples[samples.length - 1].time_s
+  return samples.map(point => {
+    const x = 50 + 460 * Math.max(0, Math.min(1, 1 - (rightTime - point.time_s) / 5))
+    const y = 115 - 97 * Math.min(1, point.s_water / chartMaximum.value)
+    return `${x.toFixed(2)},${y.toFixed(2)}`
+  }).join(' ')
+})
 
 function fittedViewportStyle(box: { width: number; height: number }, width: number, height: number): Record<string, string> {
   const rect = containRect(box.width, box.height, width, height)
@@ -343,6 +385,7 @@ async function confirmCalibration(): Promise<void> {
     videoHeight.value = nextCalibration.height
     videoError.value = ''
   }
+  detection.invalidate()
   modalOpen.value = false
   screen.value = 'monitor'
   await nextTick()
@@ -353,7 +396,27 @@ async function confirmCalibration(): Promise<void> {
     // The existing video must show the EXACT frame that was just annotated.
     currentTime.value = seekToReferenceFrame(monitorVideo.value, calibrationFrameTime.value)
     isPlaying.value = false
+    if (!monitorVideo.value.seeking) void detection.start(nextCalibration)
   }
+}
+function onMainFrameReady(): void {
+  // loadeddata provides an actual decoded frame even for a video that remains paused.
+  if (calibration.value && monitorVideo.value && !monitorVideo.value.seeking &&
+      detectorStatus.value === 'idle') void detection.start(calibration.value)
+}
+function onMainPlay(): void {
+  isPlaying.value = true
+  detection.onPlay()
+}
+function onMainPause(): void {
+  isPlaying.value = false
+  detection.stopCapture()
+}
+function onMainSeeking(): void {
+  detection.onSeekStart()
+}
+function onMainSeeked(): void {
+  if (calibration.value && detectorStatus.value === 'idle') detection.onSeekEnd()
 }
 function onMainMetadata(): void {
   const video = monitorVideo.value
@@ -363,6 +426,7 @@ function onMainMetadata(): void {
   duration.value = Number.isFinite(video.duration) ? video.duration : 0
   // Previously this unconditionally reset to t=0 and auto-played, so a wafer
   // annotated at e.g. 01:12 appeared misplaced in a different frame.
+  detection.invalidate()
   currentTime.value = seekToReferenceFrame(video, calibrationFrameTime.value)
   isPlaying.value = false
 }
@@ -403,6 +467,7 @@ function onEscape(event: KeyboardEvent): void {
 onMounted(() => { window.addEventListener('keydown', onEscape) })
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onEscape)
+  detection.invalidate()
   calibrationResizeObserver?.disconnect()
   monitorResizeObserver?.disconnect()
   if (toastTimeout) clearTimeout(toastTimeout)
@@ -446,12 +511,12 @@ onBeforeUnmount(() => {
           <div class="panel-heading"><span class="panel-title">检测画面</span><div class="heading-actions"><span class="live-label">● 视频预览</span><button class="btn btn-muted" @click="editCalibration">重新标注</button><button class="btn btn-muted" @click="chooseVideo">更换视频</button></div></div>
           <div class="video-stage" ref="monitorStage">
             <div class="video-fit" :style="monitorViewportStyle">
-              <video ref="monitorVideo" class="video-element" :src="activeUrl" playsinline preload="metadata" @loadedmetadata="onMainMetadata" @timeupdate="onMainTime" @play="isPlaying = true" @pause="isPlaying = false" @ended="isPlaying = false" @error="videoError = '视频解码失败，请更换其他格式的视频'" />
+              <video ref="monitorVideo" class="video-element" :src="activeUrl" playsinline preload="metadata" @loadedmetadata="onMainMetadata" @loadeddata="onMainFrameReady" @timeupdate="onMainTime" @play="onMainPlay" @pause="onMainPause" @ended="onMainPause" @seeking="onMainSeeking" @seeked="onMainSeeked" @error="videoError = '视频解码失败，请更换其他格式的视频'" />
               <svg v-if="calibration" class="roi-overlay" :viewBox="overlaySize" preserveAspectRatio="none" aria-hidden="true">
                 <circle :cx="calibration.cx" :cy="calibration.cy" :r="calibration.radius" class="wafer-outline"/>
                 <circle :cx="calibration.cx" :cy="calibration.cy" :r="calibration.radius * .95" class="ring-outer"/>
                 <circle :cx="calibration.cx" :cy="calibration.cy" :r="calibration.radius * .65" class="ring-inner"/>
-                <line v-for="(sector, i) in sectors" :key="i" :x1="sector.x1" :y1="sector.y1" :x2="sector.x2" :y2="sector.y2" class="sector-line"/>
+                <line v-for="(sector, i) in sectors" :key="i" :x1="sector.x1" :y1="sector.y1" :x2="sector.x2" :y2="sector.y2" class="sector-line" :class="{ 'sector-hot': detectorResult && detectorResult.sector_scores[i] >= 0.05 }"/>
                 <path :d="`M ${calibration.cx-9} ${calibration.cy} h18 M ${calibration.cx} ${calibration.cy-9} v18`" class="center-mark"/>
               </svg>
             </div>
@@ -467,12 +532,12 @@ onBeforeUnmount(() => {
         </section>
 
         <div class="right-column">
-          <section class="panel result-panel"><div><div class="data-label">当前检测结果</div><div class="status-unavailable">--</div><div class="status-description">检测数据待接入</div></div><div class="result-divider"/><div><div class="data-label">S_water · 当前值</div><div class="result-score">--</div><div class="data-note">水流扰动比例</div><div class="threshold-line">阈值 <b>0.0250</b></div></div></section>
-          <section class="panel data-panel"><div class="panel-heading"><span class="panel-title">检测数据</span></div><div class="data-grid"><div class="metric"><div class="data-label">运行时间</div><div class="metric-value">{{ currentTime.toFixed(2) }} <small>s</small></div></div><div class="metric"><div class="data-label">S_water</div><div class="metric-value metric-blue">--</div></div><div class="metric"><div class="data-label">NG 阈值</div><div class="metric-value metric-orange">0.0250</div></div><div class="metric"><div class="data-label">异常持续时间</div><div class="metric-value">-- <small>s</small></div></div><div class="metric"><div class="data-label">异常扇区</div><div class="metric-value">--</div></div><div class="metric"><div class="data-label">扇区最大值</div><div class="metric-value">--</div></div></div><div class="sector-summary"><span>检测区域</span><strong>0.65R — 0.95R · 24 扇区</strong></div></section>
-          <section class="panel chart-panel"><div class="panel-heading"><span class="panel-title">S_water 历史曲线</span><span class="chart-legend"><i/> S_water　 <b>┄</b> NG 阈值</span></div><div class="chart-body"><svg viewBox="0 0 520 140" preserveAspectRatio="none" role="img" aria-label="暂无检测数据，显示异常阈值参考线"><path d="M50 18H510 M50 66H510 M50 115H510" class="chart-grid"/><path d="M50 66H510" class="chart-threshold"/><text x="5" y="20">0.050</text><text x="5" y="68">0.025</text><text x="5" y="118">0.000</text><text x="50" y="133">-5s</text><text x="480" y="133">当前</text><text x="285" y="99" class="chart-empty">等待检测数据</text></svg></div></section>
+          <section class="panel result-panel"><div><div class="data-label">当前检测结果</div><div class="status-unavailable" :class="{ 'status-good': resultStatus === 'OK', 'status-bad': resultStatus === 'NG', 'status-error': resultStatus === 'ERROR' }">{{ resultStatus }}</div><div class="status-description" :title="resultDescription">{{ resultDescription }}</div></div><div class="result-divider"/><div><div class="data-label">S_water · 当前值</div><div class="result-score">{{ detectorResult ? detectorResult.s_water.toFixed(4) : '--' }}</div><div class="data-note">原算法 · {{ analysisFPS }} FPS 抽帧</div><div class="threshold-line">阈值 <b>{{ detectionThreshold.toFixed(4) }}</b></div></div></section>
+          <section class="panel data-panel"><div class="panel-heading"><span class="panel-title">检测数据</span></div><div class="data-grid"><div class="metric"><div class="data-label">运行时间</div><div class="metric-value">{{ currentTime.toFixed(2) }} <small>s</small></div></div><div class="metric"><div class="data-label">S_water</div><div class="metric-value metric-blue">{{ detectorResult ? detectorResult.s_water.toFixed(4) : '--' }}</div></div><div class="metric"><div class="data-label">NG 阈值</div><div class="metric-value metric-orange">{{ detectionThreshold.toFixed(4) }}</div></div><div class="metric"><div class="data-label">异常持续时间</div><div class="metric-value">{{ detectorResult ? detectorResult.abnormal_run_s.toFixed(2) : '--' }} <small>s</small></div></div><div class="metric"><div class="data-label">异常扇区</div><div class="metric-value">{{ worstSector }}</div></div><div class="metric"><div class="data-label">扇区最大值</div><div class="metric-value">{{ detectorResult ? detectorResult.max_sector_score.toFixed(4) : '--' }}</div></div></div><div class="sector-summary"><span>检测区域</span><strong>0.65R — 0.95R · 24 扇区</strong></div></section>
+          <section class="panel chart-panel"><div class="panel-heading"><span class="panel-title">S_water 历史曲线</span><span class="chart-legend"><i/> S_water　 <b>┄</b> NG 阈值</span></div><div class="chart-body"><svg viewBox="0 0 520 140" preserveAspectRatio="none" role="img" aria-label="实时水流异常检测历史曲线"><path d="M50 18H510 M50 66H510 M50 115H510" class="chart-grid"/><path :d="`M50 ${chartThresholdY}H510`" class="chart-threshold"/><polyline v-if="chartPoints" :points="chartPoints" class="chart-series"/><text x="5" y="20">{{ chartMaximum.toFixed(3) }}</text><text x="5" :y="chartThresholdY + 2">{{ detectionThreshold.toFixed(3) }}</text><text x="5" y="118">0.000</text><text x="50" y="133">-5s</text><text x="480" y="133">当前</text><text v-if="!chartPoints" x="285" y="99" class="chart-empty">等待检测数据</text></svg></div></section>
         </div>
       </main>
-      <footer class="bottom-bar"><div class="file-info"><span>视频</span><strong :title="activeName">{{ activeName }}</strong><i/>{{ videoWidth }} × {{ videoHeight }}<i/>FPS --</div><div class="footer-actions"><button class="btn btn-muted" @click="restart">↻ 从头播放</button><button class="btn btn-danger" :disabled="!isPlaying" @click="stop">■ 暂停播放</button><button class="btn btn-primary" disabled title="接入检测算法后可用">⇩ 导出检测结果</button></div></footer>
+      <footer class="bottom-bar"><div class="file-info"><span>视频</span><strong :title="activeName">{{ activeName }}</strong><i/>{{ videoWidth }} × {{ videoHeight }}<i/>FPS --</div><div class="footer-actions"><button class="btn btn-muted" @click="restart">↻ 从头播放</button><button class="btn btn-danger" :disabled="!isPlaying" @click="stop">■ 暂停播放</button><button class="btn btn-primary" :disabled="!detectionRecords.length" title="导出当前检测时段的逐帧采样数据" @click="detection.exportCSV">⇩ 导出检测结果</button></div></footer>
     </template>
 
     <input ref="fileInput" class="hidden-input" type="file" accept="video/*,.mp4,.mov,.avi,.mkv,.webm,.m4v" aria-label="选择视频文件" @change="onFileChange"/>

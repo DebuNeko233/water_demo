@@ -58,3 +58,11 @@
 .raw-click-marker.marker-edge{border-color:#ffb34e;box-shadow:0 0 0 2px #071421d9,0 0 0 4px #ffb34e88;background:#ffb34e33}
 .raw-click-marker>span{position:absolute;left:16px;top:-10px;white-space:nowrap;color:#ff7d8a;background:#081824ed;font-size:11px;padding:2px 4px}
 .raw-click-marker.marker-edge>span{color:#ffd18f}
+
+/* Live Python WaterDetector status and chart */
+.status-unavailable.status-good{color:#50d9a2}
+.status-unavailable.status-bad{color:#ff687c}
+.status-unavailable.status-error{color:#f5ae67;font-size:34px}
+.status-description{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chart-series{fill:none;stroke:#4ed1ff;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke}
+.sector-hot{stroke:#ff6978!important;stroke-width:3!important}
