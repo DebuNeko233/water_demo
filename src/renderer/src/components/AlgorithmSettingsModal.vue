@@ -29,7 +29,7 @@ function save(): void {
       <header class="algorithm-dialog-head">
         <div>
           <h2 id="algorithm-dialog-title">算法参数设置</h2>
-          <p>当前：单工位 ROI · 8 FPS 抽帧检测</p>
+          <p>当前：单工位 ROI · Python 按原视频帧率逐帧检测</p>
         </div>
         <button type="button" class="modal-close" title="关闭设置" aria-label="关闭设置" @click="emit('cancel')">×</button>
       </header>
