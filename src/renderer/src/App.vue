@@ -489,15 +489,15 @@ onBeforeUnmount(() => {
     <header class="app-header">
       <div class="brand">
         <div class="brand-icon" aria-hidden="true"><img :src="brandIconUrl" alt="" /></div>
-        <div><div class="brand-name">ZeboVision</div><div class="brand-sub">VISION INSPECTION</div></div>
+        <div class="brand-name">ZeboVision</div>
       </div>
       <div class="app-title">ZeboVision湿法清洗检测系统</div>
       <div class="header-actions">
         <span v-if="screen === 'monitor'" class="header-status"><i class="status-dot"/>本地视频</span>
         <button v-if="screen === 'monitor'" type="button" class="algorithm-gear" title="算法参数设置" aria-label="算法参数设置" @click="openAlgorithmSettings">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <circle cx="12" cy="12" r="3.5"/>
-            <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1"/>
+          <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9.671 4.136a2 2 0 0 1 4.659 0 2 2 0 0 0 2.892 1.67 2 2 0 0 1 2.33 4.033 2 2 0 0 0 0 3.34 2 2 0 0 1-2.33 4.034 2 2 0 0 0-2.892 1.67 2 2 0 0 1-4.66 0 2 2 0 0 0-2.89-1.67 2 2 0 0 1-2.33-4.033 2 2 0 0 0 0-3.34A2 2 0 0 1 6.78 5.805a2 2 0 0 0 2.891-1.67Z"/>
+            <circle cx="12" cy="11.5" r="3"/>
           </svg>
         </button>
         <div class="window-controls">
@@ -512,47 +512,41 @@ onBeforeUnmount(() => {
       <section class="welcome-card">
         <div class="welcome-icon" aria-hidden="true"><svg viewBox="0 0 46 46"><rect x="5" y="10" width="36" height="26" rx="4"/><path d="m20 17 11 6-11 6z"/></svg></div>
         <h1>选择检测视频</h1>
-        <p>选择视频后标注晶圆位置</p>
         <button type="button" class="btn btn-primary welcome-select" @click="chooseVideo">选择视频文件</button>
-        <small>支持 MP4、MOV、AVI、MKV 等常见视频文件</small>
       </section>
     </main>
 
     <template v-else>
-      <div class="statebar"><strong>实时监测</strong><span class="tag tag-green">● 已完成标注</span></div>
       <main class="workspace">
         <section class="panel video-panel">
-          <div class="panel-heading"><span class="panel-title">检测画面</span><div class="heading-actions"><span class="live-label">● 视频预览</span><button class="btn btn-muted" @click="editCalibration">重新标注</button><button class="btn btn-muted" @click="chooseVideo">更换视频</button></div></div>
+          <div class="panel-heading"><span class="panel-title">检测画面</span><div class="heading-actions"><button class="btn btn-muted" @click="editCalibration">重新标注</button><button class="btn btn-muted" @click="chooseVideo">更换视频</button></div></div>
           <div class="video-stage" ref="monitorStage">
             <div class="video-fit" :style="monitorViewportStyle">
               <img v-if="renderedFrame" class="video-element" :src="renderedFrame" alt="Python 逐帧推理后的检测画面"/>
             </div>
-            <span class="viewport-label">检测画面</span>
-            <span class="video-legend">参考帧 {{ formatTime(calibrationFrameTime) }} · Python/OpenCV 逐帧检测 · 红色：持续扰动区域</span>
             <div v-if="videoError" class="video-error">{{ videoError }}</div>
           </div>
           <div class="video-footer">
-            <div class="timeline-header"><span>视频进度</span><span>{{ Math.round(progress) }}% 已播放</span></div>
             <input class="progress-range" type="range" aria-label="视频播放进度" min="0" :max="duration || 1" step="0.01" :value="shownTime" :style="{ '--progress': progress + '%' }" :disabled="!duration" @input="onMainSeek" @change="onMainSeekEnd"/>
-            <div class="playback"><div class="playback-left"><button title="后退 5 秒" aria-label="后退 5 秒" @click="jump(-5)">↶</button><button :title="isPlaying ? '暂停' : '播放'" :aria-label="isPlaying ? '暂停' : '播放'" @click="togglePlay">{{ isPlaying ? 'Ⅱ' : '▶' }}</button><button title="前进 5 秒" aria-label="前进 5 秒" @click="jump(5)">↷</button><span>{{ formatTime(shownTime) }} / {{ formatTime(duration) }}</span></div><span class="rate">1.0×</span></div>
+            <div class="playback"><div class="playback-left"><button title="后退 5 秒" aria-label="后退 5 秒" @click="jump(-5)">↶</button><button :title="isPlaying ? '暂停' : '播放'" :aria-label="isPlaying ? '暂停' : '播放'" @click="togglePlay">{{ isPlaying ? 'Ⅱ' : '▶' }}</button><button title="前进 5 秒" aria-label="前进 5 秒" @click="jump(5)">↷</button><span>{{ formatTime(shownTime) }} / {{ formatTime(duration) }}</span></div></div>
           </div>
         </section>
 
         <div class="right-column">
-          <section class="panel result-panel"><div><div class="data-label">当前检测结果</div><div class="status-unavailable" :class="{ 'status-good': resultStatus === 'OK', 'status-bad': resultStatus === 'NG', 'status-error': resultStatus === 'ERROR' }">{{ resultStatus }}</div><div class="status-description" :title="resultDescription">{{ resultDescription }}</div></div><div class="result-divider"/><div><div class="data-label">S_water · 当前值</div><div class="result-score">{{ detectorResult ? detectorResult.s_water.toFixed(4) : '--' }}</div><div class="data-note">原算法 · {{ analysisFPS.toFixed(2) }} FPS 原视频逐帧</div><div class="threshold-line">阈值 <b>{{ detectionThreshold.toFixed(4) }}</b></div></div></section>
+          <section class="panel result-panel"><div><div class="data-label">当前检测结果</div><div class="status-unavailable" :class="{ 'status-good': resultStatus === 'OK', 'status-bad': resultStatus === 'NG', 'status-error': resultStatus === 'ERROR' }">{{ resultStatus }}</div><div v-if="resultStatus === 'ERROR' || resultStatus === '连接中' || resultStatus === 'WARMUP'" class="status-description" :title="resultDescription">{{ resultDescription }}</div></div><div class="result-divider"/><div><div class="data-label">S_water · 当前值</div><div class="result-score">{{ detectorResult ? detectorResult.s_water.toFixed(4) : '--' }}</div><div class="threshold-line">阈值 <b>{{ detectionThreshold.toFixed(4) }}</b></div></div></section>
           <section class="panel data-panel"><div class="panel-heading"><span class="panel-title">检测数据</span></div><div class="data-grid"><div class="metric"><div class="data-label">运行时间</div><div class="metric-value">{{ currentTime.toFixed(2) }} <small>s</small></div></div><div class="metric"><div class="data-label">S_water</div><div class="metric-value metric-blue">{{ detectorResult ? detectorResult.s_water.toFixed(4) : '--' }}</div></div><div class="metric"><div class="data-label">NG 阈值</div><div class="metric-value metric-orange">{{ detectionThreshold.toFixed(4) }}</div></div><div class="metric"><div class="data-label">异常持续时间</div><div class="metric-value">{{ detectorResult ? detectorResult.abnormal_run_s.toFixed(2) : '--' }} <small>s</small></div></div><div class="metric"><div class="data-label">异常扇区</div><div class="metric-value">{{ worstSector }}</div></div><div class="metric"><div class="data-label">扇区最大值</div><div class="metric-value">{{ detectorResult ? detectorResult.max_sector_score.toFixed(4) : '--' }}</div></div></div><div class="sector-summary"><span>检测区域</span><strong>{{ innerRadiusRatio.toFixed(2) }}R — {{ outerRadiusRatio.toFixed(2) }}R · {{ sectorCount }} 扇区</strong></div></section>
           <section class="panel chart-panel"><div class="panel-heading"><span class="panel-title">S_water 历史曲线</span><span class="chart-legend"><i/> S_water　 <b>┄</b> NG 阈值</span></div><div class="chart-body"><svg viewBox="0 0 520 140" preserveAspectRatio="none" role="img" aria-label="实时水流异常检测历史曲线"><path d="M50 18H510 M50 66H510 M50 115H510" class="chart-grid"/><path :d="`M50 ${chartThresholdY}H510`" class="chart-threshold"/><polyline v-if="chartPoints" :points="chartPoints" class="chart-series"/><text x="5" y="20">{{ chartMaximum.toFixed(3) }}</text><text x="5" :y="chartThresholdY + 2">{{ detectionThreshold.toFixed(3) }}</text><text x="5" y="118">0.000</text><text x="50" y="133">-5s</text><text x="480" y="133">当前</text><text v-if="!chartPoints" x="285" y="99" class="chart-empty">等待检测数据</text></svg></div></section>
         </div>
       </main>
-      <footer class="bottom-bar"><div class="file-info"><span>视频</span><strong :title="activeName">{{ activeName }}</strong><i/>{{ videoWidth }} × {{ videoHeight }}<i/>FPS --</div><div class="footer-actions"><button class="btn btn-muted" @click="restart">↻ 从头播放</button><button class="btn btn-danger" :disabled="!isPlaying" @click="stop">■ 暂停播放</button><button class="btn btn-primary" :disabled="!detectionRecords.length" title="导出当前检测时段的逐帧采样数据" @click="detection.exportCSV">⇩ 导出检测结果</button></div></footer>
+      <footer class="bottom-bar"><div class="file-info"><span>视频</span><strong :title="activeName">{{ activeName }}</strong><i v-if="activeName"/><span v-if="activeName">{{ videoWidth }} × {{ videoHeight }} · {{ analysisFPS.toFixed(2) }} FPS</span></div><div class="footer-actions"><button class="btn btn-muted" @click="restart">↻ 从头播放</button><button class="btn btn-danger" :disabled="!isPlaying" @click="stop">■ 暂停播放</button><button class="btn btn-primary" :disabled="!detectionRecords.length" title="导出当前检测时段的逐帧采样数据" @click="detection.exportCSV">⇩ 导出检测结果</button></div></footer>
     </template>
 
     <input ref="fileInput" class="hidden-input" type="file" accept="video/*,.mp4,.mov,.avi,.mkv,.webm,.m4v" aria-label="选择视频文件" @change="onFileChange"/>
     <AlgorithmSettingsModal v-if="algorithmSettingsOpen" :settings="algorithmSettings" @cancel="cancelAlgorithmSettings" @save="applyAlgorithmSettings"/>
     <div v-if="modalOpen" class="modal-mask" @click.self="closeCalibration">
       <section class="calibration-modal" role="dialog" aria-modal="true" aria-labelledby="calibration-title">
-        <div class="modal-header"><div><h2 id="calibration-title">标注晶圆位置</h2><p>点击画面中的晶圆中心，再点击晶圆边缘</p></div><div class="modal-header-actions"><button v-if="false" type="button" class="coordinate-toggle" :aria-pressed="coordinateCheckEnabled" @click="coordinateCheckEnabled = !coordinateCheckEnabled">{{ coordinateCheckEnabled ? '坐标校验：开' : '坐标校验：关' }}</button><button type="button" class="modal-close" title="取消标注" aria-label="取消标注" @click="closeCalibration">×</button></div></div>
-        <div class="modal-body"><div ref="calibrationStage" class="calibration-stage" :class="{ 'stage-ready': !!draftWidth }"><div class="video-fit calibration-fit" :style="calibrationViewportStyle" @click="onCalibrationClick"><video ref="calibrationVideo" :src="previewUrl" playsinline muted preload="metadata" @loadedmetadata="onCalibrationMetadata" @loadeddata="onCalibrationFrameReady" @timeupdate="onCalibrationTime" @seeking="calibrationFrameReady = false" @seeked="onCalibrationFrameReady" @error="notify('无法读取视频，请尝试其他格式')"/><svg ref="calibrationSvg" class="roi-overlay" :viewBox="draftOverlaySize" preserveAspectRatio="none" aria-hidden="true"><template v-if="center"><path :d="`M ${center.x-13} ${center.y} h26 M ${center.x} ${center.y-13} v26`" class="calib-cross"/><circle :cx="center.x" :cy="center.y" r="4" fill="#59d7ff"/></template><template v-if="draftCalibration"><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius" class="calib-wafer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * outerRadiusRatio" class="ring-outer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * innerRadiusRatio" class="ring-inner"/></template></svg></div><div class="frame-label">灰色虚线：晶圆边缘 R　绿色：{{ outerRadiusRatio.toFixed(2) }}R　蓝色：{{ innerRadiusRatio.toFixed(2) }}R</div></div>
+        <div class="modal-header"><div><h2 id="calibration-title">标注晶圆位置</h2></div><div class="modal-header-actions"><button v-if="false" type="button" class="coordinate-toggle" :aria-pressed="coordinateCheckEnabled" @click="coordinateCheckEnabled = !coordinateCheckEnabled">{{ coordinateCheckEnabled ? '坐标校验：开' : '坐标校验：关' }}</button><button type="button" class="modal-close" title="取消标注" aria-label="取消标注" @click="closeCalibration">×</button></div></div>
+        <div class="modal-body"><div ref="calibrationStage" class="calibration-stage" :class="{ 'stage-ready': !!draftWidth }"><div class="video-fit calibration-fit" :style="calibrationViewportStyle" @click="onCalibrationClick"><video ref="calibrationVideo" :src="previewUrl" playsinline muted preload="metadata" @loadedmetadata="onCalibrationMetadata" @loadeddata="onCalibrationFrameReady" @timeupdate="onCalibrationTime" @seeking="calibrationFrameReady = false" @seeked="onCalibrationFrameReady" @error="notify('无法读取视频，请尝试其他格式')"/><svg ref="calibrationSvg" class="roi-overlay" :viewBox="draftOverlaySize" preserveAspectRatio="none" aria-hidden="true"><template v-if="center"><path :d="`M ${center.x-13} ${center.y} h26 M ${center.x} ${center.y-13} v26`" class="calib-cross"/><circle :cx="center.x" :cy="center.y" r="4" fill="#59d7ff"/></template><template v-if="draftCalibration"><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius" class="calib-wafer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * outerRadiusRatio" class="ring-outer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * innerRadiusRatio" class="ring-inner"/></template></svg></div></div>
           <div class="calib-timeline"><span>定位画面</span><input type="range" aria-label="标注画面位置" min="0" :max="calibrationDuration || 1" step="0.01" :value="calibrationTime" :style="{ '--progress': calibrationProgress + '%' }" :disabled="!calibrationDuration" @input="onCalibrationSeek"/><span>{{ formatTime(calibrationTime) }} / {{ formatTime(calibrationDuration) }}</span></div>
           <div class="calibration-status"><strong>{{ calibrationPhase }}</strong><span>{{ calibrationMeasure }}</span></div>
           <div v-if="coordinateCheckEnabled" class="coordinate-debug">
