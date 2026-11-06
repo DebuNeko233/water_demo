@@ -1,6 +1,8 @@
 /** Only passes frames from the currently visible HTMLVideoElement to Python.
  * Python WaterDetector (from main1_chn.py) owns all scoring and NG hysteresis.
  */
+import { toPlainCalibration } from './detection-payload.mjs'
+
 export const ANALYSIS_FPS = 8
 
 export interface WaferCalibration {
