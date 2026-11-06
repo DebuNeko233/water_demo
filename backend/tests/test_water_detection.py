@@ -222,3 +222,24 @@ def test_lossless_png_sequence_reaches_real_detector_state():
             assert response.status_code == 200, response.text
             scores.append(response.json()['s_water'])
         assert max(scores) > 0
+
+
+def test_missing_analyzed_video_time_bucket_resets_instead_of_faking_consecutive_frames():
+    # At a target rate of 8 FPS, a 0.375 s gap means multiple 8 Hz
+    # sampling buckets were skipped. The original algorithm assumes
+    # consecutive samples: temporal statistics must be restarted.
+    with TestClient(create_app()) as client:
+        sid = begin(client)
+        for i in range(7):
+            response = client.post('/api/detection/frame', json={
+                'session_id': sid, 'time_s': i / 8,
+                'jpeg_base64': make_jpeg(i),
+            })
+            assert response.status_code == 200
+        after_gap = client.post('/api/detection/frame', json={
+            'session_id': sid, 'time_s': 1.125,
+            'jpeg_base64': make_jpeg(99),
+        })
+        assert after_gap.status_code == 200
+        assert after_gap.json()['status'] == 'WARMUP'
+        assert len(after_gap.json()['history']) == 1

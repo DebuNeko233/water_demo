@@ -145,7 +145,7 @@ class WaterDetectionSession:
             # session on explicit seek, video switch, or recalibration.
             if self._last_time is not None and (
                 packet.time_s <= self._last_time + 1e-5
-                or packet.time_s - self._last_time > max(0.45, 4.0 / self._fps)
+                or packet.time_s - self._last_time > 1.6 / self._fps
             ):
                 # Original main1_chn.py has no reset() method: recreate it,
                 # preserving its calculations and freshly starting persistence.

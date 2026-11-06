@@ -107,7 +107,7 @@ def run_candidate(samples: list[dict], calib: Calibration,
     for packet in samples:
         t = packet['time_s']
         # The live backend reinitializes its history on large video-time gaps.
-        if last_s is not None and (t <= last_s or t-last_s > max(.45, 4/SAMPLE_FPS)):
+        if last_s is not None and (t <= last_s or t-last_s > 1.6 / SAMPLE_FPS):
             detector = WaterDetector((h, w), SAMPLE_FPS, calib, config)
         last_s = t
         result = detector.process(packet['frame'])
