@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { BackendEvent, BackendStatus, DesktopBridge } from '../shared/bridge'
 
 // 只把经过明确设计的白名单方法提供给 Vue，不暴露原始 ipcRenderer。
@@ -26,6 +26,7 @@ const desktop: DesktopBridge = {
   },
   system: {
     selectFile: () => ipcRenderer.invoke('system:select-file'),
+    getPathForFile: (file) => webUtils.getPathForFile(file),
     openLogs: (target) => ipcRenderer.invoke('system:open-logs', target),
     minimize: () => ipcRenderer.invoke('system:minimize'),
     toggleMaximize: () => ipcRenderer.invoke('system:toggle-maximize'),
