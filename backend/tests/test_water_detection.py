@@ -171,3 +171,54 @@ def test_default_parameters_match_original_main1_chn_demo_config():
         "sector_threshold": 0.05,
         "blur_ksize": 3,
     }
+
+
+def test_lossless_png_transport_preserves_detector_inputs_and_rejects_fake_png():
+    with TestClient(create_app()) as client:
+        session = begin(client)
+        rng = np.random.default_rng(123)
+        frame = rng.integers(0, 256, size=(96, 96, 3), dtype=np.uint8)
+        ok, encoded = cv2.imencode('.png', frame)
+        assert ok
+        # Unlike JPEG, OpenCV re-decoding must preserve the original BGR pixels.
+        restored = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+        assert np.array_equal(restored, frame)
+        response = client.post('/api/detection/frame', json={
+            'session_id': session, 'time_s': 0,
+            'png_base64': base64.b64encode(encoded.tobytes()).decode('ascii'),
+        })
+        assert response.status_code == 200, response.text
+        assert response.json()['status'] == 'WARMUP'
+        fake = client.post('/api/detection/frame', json={
+            'session_id': session, 'time_s': 0.125,
+            'png_base64': base64.b64encode(b'not PNG').decode('ascii'),
+        })
+        assert fake.status_code == 422
+        both = client.post('/api/detection/frame', json={
+            'session_id': session, 'time_s': 0.25,
+            'png_base64': base64.b64encode(encoded.tobytes()).decode('ascii'),
+            'jpeg_base64': make_jpeg(),
+        })
+        assert both.status_code == 422
+
+
+def test_lossless_png_sequence_reaches_real_detector_state():
+    with TestClient(create_app()) as client:
+        session = begin(client)
+        scores = []
+        for i in range(12):
+            frame = np.full((96, 96, 3), 80, dtype=np.uint8)
+            yy, xx = np.indices((96, 96))
+            ring = ((xx - 48) ** 2 + (yy - 48) ** 2 >= 22 ** 2) & (
+                (xx - 48) ** 2 + (yy - 48) ** 2 <= 30 ** 2)
+            rng = np.random.default_rng(i)
+            frame[ring] = rng.integers(30, 150, size=(ring.sum(), 1), dtype=np.uint8)
+            ok, buf = cv2.imencode('.png', frame)
+            assert ok
+            response = client.post('/api/detection/frame', json={
+                'session_id': session, 'time_s': i / 8,
+                'png_base64': base64.b64encode(buf.tobytes()).decode('ascii'),
+            })
+            assert response.status_code == 200, response.text
+            scores.append(response.json()['s_water'])
+        assert max(scores) > 0

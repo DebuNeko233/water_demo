@@ -56,10 +56,10 @@ export async function beginDetection(calibration: WaferCalibration, settings: Al
   })
 }
 
-export async function analyzeVideoFrame(sessionId: string, time: number, jpegBase64: string): Promise<DetectionResult> {
+export async function analyzeVideoFrame(sessionId: string, time: number, pngBase64: string): Promise<DetectionResult> {
   return window.desktop.backend.request<DetectionResult>('POST', '/api/detection/frame', {
     session_id: sessionId,
     time_s: time,
-    jpeg_base64: jpegBase64,
+    png_base64: pngBase64,
   })
 }

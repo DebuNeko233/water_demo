@@ -6,6 +6,7 @@
  */
 import { onBeforeUnmount, ref, type Ref } from 'vue'
 import { copyAlgorithmSettings, type AlgorithmSettings } from '../utils/algorithm-settings.mjs'
+import { createFrameSampler } from '../utils/frameSampling.mjs'
 import {
   ANALYSIS_FPS, analyzeVideoFrame, beginDetection,
   type DetectionResult, type WaferCalibration,
@@ -22,7 +23,7 @@ export function useWaterDetection(videoRef: Ref<HTMLVideoElement | null>, settin
   let sessionId: string | null = null
   let epoch = 0
   let frameInFlight = false
-  let lastSent = -Infinity
+  const samplingClock = createFrameSampler(ANALYSIS_FPS)
   let callbackId: number | null = null
   let fallbackTimer: ReturnType<typeof setInterval> | null = null
   let currentCalibration: WaferCalibration | null = null
@@ -44,7 +45,7 @@ export function useWaterDetection(videoRef: Ref<HTMLVideoElement | null>, settin
     epoch += 1
     stopCapture()
     sessionId = null
-    lastSent = -Infinity
+    samplingClock.reset()
     frameInFlight = false
     result.value = null
     records.value = []
@@ -93,9 +94,8 @@ export function useWaterDetection(videoRef: Ref<HTMLVideoElement | null>, settin
     const version = epoch
     if (!video || !sid || !context || frameInFlight || video.seeking || video.paused ||
       video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA ||
-      time_s - lastSent < 1 / ANALYSIS_FPS - 0.01 || time_s <= lastSent) return
+      !samplingClock.shouldSample(time_s)) return
     frameInFlight = true
-    lastSent = time_s
     try {
       const width = video.videoWidth
       const height = video.videoHeight
@@ -105,8 +105,10 @@ export function useWaterDetection(videoRef: Ref<HTMLVideoElement | null>, settin
         canvas.height = height
       }
       context.drawImage(video, 0, 0, width, height)
-      const jpegBase64 = canvas.toDataURL('image/jpeg', 0.62).split(',')[1]
-      const next = await analyzeVideoFrame(sid, time_s, jpegBase64)
+      // PNG is lossless. JPEG 0.62 introduced artificial gray-level changes
+      // between frames and was not part of the original OpenCV detector.
+      const pngBase64 = canvas.toDataURL('image/png').split(',')[1]
+      const next = await analyzeVideoFrame(sid, time_s, pngBase64)
       if (version !== epoch || sessionId !== sid) return
       result.value = next
       records.value.push(next)
