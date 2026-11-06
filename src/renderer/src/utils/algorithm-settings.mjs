@@ -24,7 +24,7 @@ export const ALGORITHM_GROUPS = [
   { title: '图像与时序', hint: '基于灰度帧差及像素运动驻留',
     fields: [
       { key: 'diff_threshold', label: '灰度帧差阈值', unit: '灰度级', min: 0, max: 255, step: 0.5 },
-      { key: 'blur_ksize', label: '高斯模糊核大小', unit: 'px', min: 0, max: 15, step: 2 },
+      { key: 'blur_ksize', label: '高斯模糊核大小', unit: 'px', min: 0, max: 15, step: 1 },
       { key: 'history_seconds', label: '驻留统计窗口', unit: 's', min: 0.125, max: 3, step: 0.125 },
       { key: 'persistence_threshold', label: '像素驻留比例', unit: '', min: 0, max: 1, step: 0.05 },
     ] },
