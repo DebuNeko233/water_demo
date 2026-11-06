@@ -14,7 +14,7 @@ from uuid import uuid4
 
 import cv2
 import numpy as np
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .water_detection import Calibration, DemoConfig, WaterDetector
 
@@ -27,10 +27,34 @@ class CalibrationInput(BaseModel):
     height: int = Field(ge=1, le=4096)
 
 
+
+class DetectorSettings(BaseModel):
+    """Editable numeric subset of the original DemoConfig (8 FPS is fixed)."""
+    inner_radius_ratio: float = Field(0.65, ge=0.05, le=1.5, allow_inf_nan=False)
+    outer_radius_ratio: float = Field(0.95, ge=0.05, le=1.5, allow_inf_nan=False)
+    diff_threshold: float = Field(8.0, ge=0.0, le=255.0, allow_inf_nan=False)
+    history_seconds: float = Field(0.50, ge=0.125, le=3.0, allow_inf_nan=False)
+    persistence_threshold: float = Field(0.50, ge=0.0, le=1.0, allow_inf_nan=False)
+    s_water_threshold: float = Field(0.025, ge=0.0, le=1.0, allow_inf_nan=False)
+    ng_hold_seconds: float = Field(0.50, ge=0.0, le=30.0, allow_inf_nan=False)
+    recover_hold_seconds: float = Field(0.60, ge=0.0, le=30.0, allow_inf_nan=False)
+    sector_count: int = Field(24, ge=4, le=72)
+    sector_threshold: float = Field(0.05, ge=0.0, le=1.0, allow_inf_nan=False)
+    blur_ksize: int = Field(3, ge=0, le=15)
+
+    @model_validator(mode='after')
+    def check_geometry_and_blur(self):
+        if self.inner_radius_ratio >= self.outer_radius_ratio:
+            raise ValueError('inner_radius_ratio must be less than outer_radius_ratio')
+        if self.blur_ksize > 1 and self.blur_ksize % 2 == 0:
+            raise ValueError('blur_ksize must be 0, 1, or an odd number')
+        return self
+
 class StartInput(BaseModel):
     calibration: CalibrationInput
     # These are *analyzed* frame samples per second, not the video's native FPS.
-    sample_fps: float = Field(default=8.0, ge=2, le=20)
+    sample_fps: float = Field(default=8.0, ge=8.0, le=8.0)
+    detector: DetectorSettings = Field(default_factory=DetectorSettings)
 
 
 class FrameInput(BaseModel):
@@ -66,7 +90,7 @@ class WaterDetectionSession:
         if cal.width * cal.height > 4_194_304:
             raise ValueError('Video exceeds the real-time detection size limit (4.2 megapixels)')
         with self._lock:
-            self._config = DemoConfig()  # Defaults are from the original main1_chn.py.
+            self._config = DemoConfig(**config.detector.model_dump())  # Validated, user-selected algorithm settings.
             detector = WaterDetector(
                 (cal.height, cal.width), config.sample_fps,
                 Calibration(cal.cx, cal.cy, cal.radius), self._config,
@@ -84,6 +108,8 @@ class WaterDetectionSession:
                 'sector_threshold': self._config.sector_threshold,
                 'history_seconds': self._config.history_seconds,
                 'sector_count': self._config.sector_count,
+                'inner_radius_ratio': self._config.inner_radius_ratio,
+                'outer_radius_ratio': self._config.outer_radius_ratio,
             }
 
     def process(self, packet: FrameInput) -> dict:
@@ -130,6 +156,9 @@ class WaterDetectionSession:
                 'history_ready': bool(result['history_ready']),
                 's_water_threshold': self._config.s_water_threshold,
                 'sector_threshold': self._config.sector_threshold,
+                'sector_count': self._config.sector_count,
+                'inner_radius_ratio': self._config.inner_radius_ratio,
+                'outer_radius_ratio': self._config.outer_radius_ratio,
                 'max_sector_idx': int(result['max_sector_idx']),
                 'max_sector_score': float(result['max_sector_score']),
                 'sector_scores': [float(x) for x in result['sector_scores']],
