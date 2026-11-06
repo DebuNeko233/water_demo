@@ -39,6 +39,7 @@ export class BackendManager {
   private stopping = false
   private currentStatus: BackendStatus = 'starting'
   private latestError = ''
+  private stderrTail = ''
 
   constructor(private readonly notify: (status: BackendStatus) => void) {}
 
@@ -52,8 +53,25 @@ export class BackendManager {
     if (!app.isPackaged && !this.stopping) this.change('offline')
   }
   get baseUrl(): string {
-    if (!this.endpoint) throw new Error('Python backend is not ready')
+    if (!this.endpoint) {
+      throw new Error('Python backend is not ready: ' + (this.latestError || this.currentStatus))
+    }
     return this.endpoint
+  }
+
+  private async waitUntilReady(): Promise<void> {
+    // The monitor is visible before a packaged Python interpreter finishes
+    // initializing. Waiting here prevents false "backend not ready" errors
+    // when the user selects a video immediately after launching Electron.
+    const deadline = Date.now() + 33_000
+    while (this.currentStatus === 'starting' && Date.now() < deadline) {
+      await pause(150)
+    }
+    if (this.currentStatus === 'ready' && this.endpoint) return
+    throw new Error(
+      'Python backend is not ready (' + this.currentStatus + '): ' +
+      (this.latestError || '后端未能启动，请检查软件目录是否完整以及 electron.log'),
+    )
   }
 
   private change(status: BackendStatus): void {
@@ -99,6 +117,7 @@ export class BackendManager {
       throw error
     }
     // 每次启动生成新的会话/控制令牌，前者用于 API，后者仅用于停机。
+    this.stderrTail = ''
     const sessionId = randomUUID()
     const startupDirectory = path.join(app.getPath('userData'), 'startup')
     fs.mkdirSync(startupDirectory, { recursive: true })
@@ -110,7 +129,10 @@ export class BackendManager {
     const child = spawn(python, ['-I', '-m', 'sample_backend'], {
       cwd: path.dirname(python),
       windowsHide: true,
-      stdio: 'ignore',
+      // Capture Python's startup traceback for failures such as missing
+      // DLLs, site-packages or unsupported video codecs. No extra console
+      // window is opened for users; only local Electron logs record it.
+      stdio: ['ignore', 'ignore', 'pipe'],
       env: {
         ...process.env,
         APP_PARENT_PID: String(process.pid),
@@ -123,14 +145,22 @@ export class BackendManager {
       },
     })
     this.child = child
+    child.stderr?.on('data', (chunk: Buffer | string) => {
+      this.stderrTail = (this.stderrTail + String(chunk)).slice(-12_000)
+    })
     let failure: Error | null = null
     child.on('error', (error) => { failure = error })
-    child.once('exit', (code) => {
-      console.info('Python exited:', code)
+    child.once('exit', (code, signal) => {
+      const exit = typeof code === 'number'
+        ? String(code) + ' / 0x' + (code >>> 0).toString(16)
+        : String(signal)
+      const reason = 'Python exited (' + exit + ')' +
+        (this.stderrTail.trim() ? ': ' + this.stderrTail.trim() : '')
+      console.error(reason)
       if (this.child === child) {
         this.child = null
         if (!this.stopping) {
-          this.latestError = 'Python 后端意外退出（exit code: ' + String(code) + '）'
+          this.latestError = reason
           this.change('failed')
         }
       }
@@ -158,11 +188,18 @@ export class BackendManager {
       }
       throw new Error('Python startup timeout')
     } catch (error) {
-      console.error('Python startup failed:', error)
-      this.latestError = String(error)
+      const details = [
+        error instanceof Error ? error.message : String(error),
+        this.stderrTail.trim(),
+      ].filter(Boolean).join('\n')
+      // stop() transitions to offline. Restore the meaningful failure status
+      // afterwards, otherwise IPC clients only see a generic unavailable
+      // backend instead of the actual Python import/loader failure.
       await this.stop()
+      this.latestError = details
+      console.error('Python startup failed:', details)
       this.change('failed')
-      throw error
+      throw new Error(details)
     } finally {
       this.removeReadyFile()
     }
@@ -193,6 +230,7 @@ export class BackendManager {
     // larger payload cap limited to this one trusted local API route.
     const maxSize = apiPath === '/api/detection/frame' ? 25_000_000 : 65_536
     if (json && json.length > maxSize) throw new Error('Request too large')
+    await this.waitUntilReady()
     const response = await fetch(this.baseUrl + apiPath, {
       method,
       headers: {
