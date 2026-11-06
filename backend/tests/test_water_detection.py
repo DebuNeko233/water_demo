@@ -97,14 +97,19 @@ def test_time_gap_does_not_reset_original_water_detector():
         assert res.json()['status'] != 'WARMUP'
         assert len(res.json()['history']) == 9
 
-def test_custom_algorithm_settings_apply_to_detector_and_reinitialize_history():
+def test_custom_algorithm_settings_apply_to_detector_and_reinitialize_history(monkeypatch, tmp_path):
+    # Explicit configuration is privileged even on the deprecated frame API.
+    monkeypatch.setenv('APP_DATA_DIR', str(tmp_path))
     custom = dict(inner_radius_ratio=0.55, outer_radius_ratio=0.98,
                   diff_threshold=11.0, history_seconds=0.375,
                   persistence_threshold=0.6, s_water_threshold=0.09,
                   ng_hold_seconds=0.75, recover_hold_seconds=0.9,
                   sector_count=12, sector_threshold=0.08, blur_ksize=5)
     with TestClient(create_app()) as client:
-        payload = {'sample_fps': 8, 'calibration': {
+        setup = client.post('/api/users/setup', json={'password': 'Tests#1234'})
+        assert setup.status_code == 200, setup.text
+        admin_token = setup.json()['admin_token']
+        payload = {'sample_fps': 8, 'admin_token': admin_token, 'calibration': {
             'cx': 48, 'cy': 48, 'radius': 32, 'width': 96, 'height': 96},
             'detector': custom}
         response = client.post('/api/detection/start', json=payload)
