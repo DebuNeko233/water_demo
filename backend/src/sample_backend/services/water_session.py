@@ -60,7 +60,14 @@ class StartInput(BaseModel):
 class FrameInput(BaseModel):
     session_id: str = Field(min_length=1, max_length=64)
     time_s: float = Field(ge=0, le=86400)
-    jpeg_base64: str = Field(min_length=8, max_length=2_000_000)
+    png_base64: str | None = Field(default=None, min_length=8, max_length=24_000_000)
+    jpeg_base64: str | None = Field(default=None, min_length=8, max_length=2_000_000)
+
+    @model_validator(mode='after')
+    def exactly_one_format(self):
+        if (self.png_base64 is None) == (self.jpeg_base64 is None):
+            raise ValueError('Supply exactly one of png_base64 or jpeg_base64')
+        return self
 
 
 class SessionExpired(ValueError):
@@ -120,13 +127,17 @@ class WaterDetectionSession:
             if not math.isfinite(packet.time_s):
                 raise InvalidFrame('Frame time must be finite')
             try:
-                raw = base64.b64decode(packet.jpeg_base64, validate=True)
+                raw = base64.b64decode(packet.png_base64 or packet.jpeg_base64 or '', validate=True)
             except (ValueError, binascii.Error) as exc:
-                raise InvalidFrame('Invalid JPEG base64 data') from exc
+                raise InvalidFrame('Invalid image base64 data') from exc
+            if packet.png_base64 is not None and not raw.startswith(b'\x89PNG\r\n\x1a\n'):
+                raise InvalidFrame('Expected lossless PNG image')
+            if packet.jpeg_base64 is not None and not raw.startswith(b'\xff\xd8'):
+                raise InvalidFrame('Expected JPEG image')
             encoded = np.frombuffer(raw, dtype=np.uint8)
             image = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
             if image is None:
-                raise InvalidFrame('Cannot decode JPEG')
+                raise InvalidFrame('Cannot decode image')
             if image.shape[:2] != (self._height, self._width):
                 raise InvalidFrame('Frame resolution does not match calibration')
             # Seeking, repeated frames or a long gap must not carry over an old
@@ -134,7 +145,7 @@ class WaterDetectionSession:
             # session on explicit seek, video switch, or recalibration.
             if self._last_time is not None and (
                 packet.time_s <= self._last_time + 1e-5
-                or packet.time_s - self._last_time > max(0.45, 4.0 / self._fps)
+                or packet.time_s - self._last_time > 1.6 / self._fps
             ):
                 # Original main1_chn.py has no reset() method: recreate it,
                 # preserving its calculations and freshly starting persistence.
