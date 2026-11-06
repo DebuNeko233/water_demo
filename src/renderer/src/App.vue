@@ -34,7 +34,10 @@ const screen = ref<Screen>('welcome')
 const fileInput = ref<HTMLInputElement | null>(null)
 const calibrationVideo = ref<HTMLVideoElement | null>(null)
 const monitorVideo = ref<HTMLVideoElement | null>(null)
-const algorithmSettings = ref<AlgorithmSettings>(readAlgorithmSettings(window.localStorage))
+function settingsStorage(): Storage | undefined {
+  try { return window.localStorage } catch { return undefined }
+}
+const algorithmSettings = ref<AlgorithmSettings>(readAlgorithmSettings(settingsStorage()))
 const algorithmSettingsOpen = ref(false)
 let settingsResumePlayback = false
 const detection = useWaterDetection(monitorVideo, algorithmSettings)
@@ -503,7 +506,7 @@ function applyAlgorithmSettings(next: AlgorithmSettings): void {
   algorithmSettings.value = values
   algorithmSettingsOpen.value = false
   try {
-    storeAlgorithmSettings(window.localStorage, values)
+    storeAlgorithmSettings(settingsStorage(), values)
     notify('算法参数已应用')
   } catch {
     notify('参数已应用，本地持久保存失败')
