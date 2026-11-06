@@ -5,9 +5,15 @@ import { svgSourceToClient } from './utils/svgCoordinates.mjs'
 import { calibrationPointerToSource } from './utils/calibrationPointer.mjs'
 import { usePythonVideoStream } from './composables/usePythonVideoStream'
 import AlgorithmSettingsModal from './components/AlgorithmSettingsModal.vue'
+import AdminAccessDialog from './components/AdminAccessDialog.vue'
+import {
+  loadUserStatus, setupAdministrator, loginAdministrator,
+  logoutAdministrator, saveApprovedSettings,
+  type UserRole,
+} from './services/user-management'
 import brandIconUrl from './assets/brand-icon.ico?url'
 import {
-  copyAlgorithmSettings, readAlgorithmSettings, storeAlgorithmSettings,
+  DEFAULT_ALGORITHM_SETTINGS, copyAlgorithmSettings,
   type AlgorithmSettings,
 } from './utils/algorithm-settings.mjs'
 
@@ -33,13 +39,20 @@ type Screen = 'welcome' | 'monitor'
 const screen = ref<Screen>('monitor')
 const fileInput = ref<HTMLInputElement | null>(null)
 const calibrationVideo = ref<HTMLVideoElement | null>(null)
-function settingsStorage(): Storage | undefined {
-  try { return window.localStorage } catch { return undefined }
-}
-const algorithmSettings = ref<AlgorithmSettings>(readAlgorithmSettings(settingsStorage()))
+// Administrator-approved settings are stored and enforced in Python, never
+// trusted from browser localStorage or a client-supplied configuration.
+const algorithmSettings = ref<AlgorithmSettings>(copyAlgorithmSettings(DEFAULT_ALGORITHM_SETTINGS))
+const currentRole = ref<UserRole>('operator')
+const adminToken = ref('')
+const adminConfigured = ref(false)
+const adminDialogOpen = ref(false)
+const adminBusy = ref(false)
+const adminError = ref('')
+const settingsBusy = ref(false)
+let unsubscribeBackendStatus: (() => void) | undefined
 const algorithmSettingsOpen = ref(false)
 let settingsResumePlayback = false
-const detection = usePythonVideoStream(algorithmSettings)
+const detection = usePythonVideoStream()
 const renderedFrame = detection.renderedFrame
 const detectorResult = detection.result
 const detectorStatus = detection.status
@@ -436,8 +449,68 @@ function windowAction(action: 'minimize' | 'toggleMaximize' | 'closeWindow'): vo
   if (!desktop?.system) return
   void desktop.system[action]()
 }
+async function refreshUserStatus(): Promise<void> {
+  try {
+    const status = await loadUserStatus()
+    adminConfigured.value = status.admin_configured
+    algorithmSettings.value = copyAlgorithmSettings(status.settings)
+  } catch {
+    // Python may still be launching; an explicit login attempt reports errors.
+  }
+}
+function userErrorText(reason: unknown): string {
+  const info = String(reason)
+  if (info.includes('WRONG_PASSWORD')) return '密码错误'
+  if (info.includes('LOGIN_LOCKED')) return '尝试次数过多，请稍后再试'
+  if (info.includes('ADMIN_ALREADY_CONFIGURED')) return '管理员已设置，请使用密码登录'
+  if (info.includes('ADMIN_REQUIRED')) return '管理员验证已失效，请重新登录'
+  return '操作失败，请检查密码或后端连接'
+}
+function resetToOperator(): void {
+  currentRole.value = 'operator'
+  adminToken.value = ''
+  adminDialogOpen.value = false
+  adminError.value = ''
+  if (algorithmSettingsOpen.value) cancelAlgorithmSettings()
+}
+function switchUser(): void {
+  if (currentRole.value === 'admin') {
+    const token = adminToken.value
+    resetToOperator()
+    void logoutAdministrator(token).catch(() => undefined)
+  } else {
+    adminError.value = ''
+    adminDialogOpen.value = true
+    void refreshUserStatus()
+  }
+}
+async function authorizeAdministrator(password: string): Promise<void> {
+  if (adminBusy.value) return
+  adminBusy.value = true
+  adminError.value = ''
+  try {
+    const login = adminConfigured.value
+      ? await loginAdministrator(password)
+      : await setupAdministrator(password)
+    algorithmSettings.value = copyAlgorithmSettings(login.settings)
+    adminConfigured.value = true
+    adminToken.value = login.admin_token
+    currentRole.value = 'admin'
+    adminDialogOpen.value = false
+    notify('已切换到管理员')
+  } catch (reason) {
+    adminError.value = userErrorText(reason)
+    if (String(reason).includes('ADMIN_ALREADY_CONFIGURED')) {
+      adminConfigured.value = true
+    }
+  } finally {
+    adminBusy.value = false
+  }
+}
+
 function openAlgorithmSettings(): void {
-  if (screen.value !== 'monitor' || algorithmSettingsOpen.value || modalOpen.value) return
+  if (currentRole.value !== 'admin' || !adminToken.value ||
+      screen.value !== 'monitor' || algorithmSettingsOpen.value || modalOpen.value) return
   settingsResumePlayback = isPlaying.value
   detection.pause()
   algorithmSettingsOpen.value = true
@@ -452,29 +525,55 @@ function cancelAlgorithmSettings(): void {
   resumeAfterSettings()
 }
 async function applyAlgorithmSettings(next: AlgorithmSettings): Promise<void> {
-  algorithmSettings.value = copyAlgorithmSettings(next)
-  algorithmSettingsOpen.value = false
-  try {
-    storeAlgorithmSettings(settingsStorage(), algorithmSettings.value)
-    notify('算法参数已应用')
-  } catch {
-    notify('参数已应用，本地持久保存失败')
+  if (settingsBusy.value) return
+  if (currentRole.value !== 'admin' || !adminToken.value) {
+    notify('只有管理员可以修改设置')
+    algorithmSettingsOpen.value = false
+    return
   }
-  const resume = settingsResumePlayback
-  settingsResumePlayback = false
-  if (calibration.value && activeVideoPath.value) {
-    await detection.open(activeVideoPath.value, calibration.value, currentTime.value, resume)
+  settingsBusy.value = true
+  try {
+    const response = await saveApprovedSettings(adminToken.value, copyAlgorithmSettings(next))
+    algorithmSettings.value = copyAlgorithmSettings(response.settings)
+    algorithmSettingsOpen.value = false
+    const resume = settingsResumePlayback
+    settingsResumePlayback = false
+    notify('算法参数已应用')
+    if (calibration.value && activeVideoPath.value) {
+      await detection.open(activeVideoPath.value, calibration.value, currentTime.value, resume)
+    }
+  } catch (reason) {
+    notify(userErrorText(reason))
+    if (String(reason).includes('ADMIN_REQUIRED')) resetToOperator()
+  } finally {
+    settingsBusy.value = false
   }
 }
 
 function onEscape(event: KeyboardEvent): void {
   if (event.key !== 'Escape') return
-  if (algorithmSettingsOpen.value) cancelAlgorithmSettings()
+  if (adminDialogOpen.value) adminDialogOpen.value = false
+  else if (algorithmSettingsOpen.value) cancelAlgorithmSettings()
   else if (modalOpen.value) closeCalibration()
 }
-onMounted(() => { window.addEventListener('keydown', onEscape) })
+onMounted(() => {
+  window.addEventListener('keydown', onEscape)
+  void refreshUserStatus()
+  if (window.desktop?.backend) {
+    unsubscribeBackendStatus = window.desktop.backend.onStatus((status) => {
+      if (status === 'ready') {
+        // Backend restart always invalidates administrator authentication.
+        resetToOperator()
+        void refreshUserStatus()
+      } else if (status === 'offline' || status === 'failed') {
+        resetToOperator()
+      }
+    })
+  }
+})
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onEscape)
+  unsubscribeBackendStatus?.()
   detection.invalidate()
   calibrationResizeObserver?.disconnect()
   monitorResizeObserver?.disconnect()
@@ -494,7 +593,11 @@ onBeforeUnmount(() => {
       <div class="app-title">ZeboVision湿法清洗检测系统</div>
       <div class="header-actions">
         <span v-if="screen === 'monitor'" class="header-status"><i class="status-dot"/>本地视频</span>
-        <button v-if="screen === 'monitor'" type="button" class="algorithm-gear" title="算法参数设置" aria-label="算法参数设置" @click="openAlgorithmSettings">
+        <button type="button" class="role-switch" :title="currentRole === 'admin' ? '退出管理员' : '切换管理员'" :aria-label="currentRole === 'admin' ? '退出管理员' : '切换管理员'" @click="switchUser">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></svg>
+          <span>{{ currentRole === 'admin' ? '管理员' : '操作员' }}</span>
+        </button>
+        <button v-if="screen === 'monitor' && currentRole === 'admin'" type="button" class="algorithm-gear" title="算法参数设置" aria-label="算法参数设置" @click="openAlgorithmSettings">
           <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <path d="M9.671 4.136a2 2 0 0 1 4.659 0 2 2 0 0 0 2.892 1.67 2 2 0 0 1 2.33 4.033 2 2 0 0 0 0 3.34 2 2 0 0 1-2.33 4.034 2 2 0 0 0-2.892 1.67 2 2 0 0 1-4.66 0 2 2 0 0 0-2.89-1.67 2 2 0 0 1-2.33-4.033 2 2 0 0 0 0-3.34A2 2 0 0 1 6.78 5.805a2 2 0 0 0 2.891-1.67Z"/>
             <circle cx="12" cy="11.5" r="3"/>
@@ -542,7 +645,8 @@ onBeforeUnmount(() => {
     </template>
 
     <input ref="fileInput" class="hidden-input" type="file" accept="video/*,.mp4,.mov,.avi,.mkv,.webm,.m4v" aria-label="选择视频文件" @change="onFileChange"/>
-    <AlgorithmSettingsModal v-if="algorithmSettingsOpen" :settings="algorithmSettings" @cancel="cancelAlgorithmSettings" @save="applyAlgorithmSettings"/>
+    <AlgorithmSettingsModal v-if="algorithmSettingsOpen && currentRole === 'admin'" :settings="algorithmSettings" @cancel="cancelAlgorithmSettings" @save="applyAlgorithmSettings"/>
+    <AdminAccessDialog v-if="adminDialogOpen" :configured="adminConfigured" :busy="adminBusy" :error="adminError" @cancel="adminDialogOpen = false" @submit="authorizeAdministrator"/>
     <div v-if="modalOpen" class="modal-mask" @click.self="closeCalibration">
       <section class="calibration-modal" role="dialog" aria-modal="true" aria-labelledby="calibration-title">
         <div class="modal-header"><div><h2 id="calibration-title">标注晶圆位置</h2></div><div class="modal-header-actions"><button v-if="false" type="button" class="coordinate-toggle" :aria-pressed="coordinateCheckEnabled" @click="coordinateCheckEnabled = !coordinateCheckEnabled">{{ coordinateCheckEnabled ? '坐标校验：开' : '坐标校验：关' }}</button><button type="button" class="modal-close" title="取消标注" aria-label="取消标注" @click="closeCalibration">×</button></div></div>

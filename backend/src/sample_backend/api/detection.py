@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException, Request
 from sample_backend.services.water_session import (
     FrameInput, InvalidFrame, SessionExpired, StartInput,
 )
+from sample_backend.services.user_access import AccessDenied
 
 router = APIRouter(prefix='/api/detection')
 
@@ -10,7 +11,10 @@ router = APIRouter(prefix='/api/detection')
 @router.post('/start')
 def detection_start(body: StartInput, request: Request) -> dict:
     try:
-        return request.app.state.water_detector.start(body)
+        settings = request.app.state.user_access.resolve_detector(body.detector, body.admin_token)
+        return request.app.state.water_detector.start(body.model_copy(update={'detector': settings}))
+    except AccessDenied as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

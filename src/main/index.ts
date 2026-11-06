@@ -225,13 +225,16 @@ async function runPackagedSmokeTest(): Promise<void> {
         const controls = [...document.querySelectorAll('.heading-actions button')]
         const replace = controls.find(btn => btn.textContent?.trim() === '更换视频')
         const gear = document.querySelector('button.algorithm-gear[aria-label="算法参数设置"]')
+        const role = document.querySelector('button.role-switch')?.textContent?.trim()
         const fileInput = document.querySelector('input[type="file"]')
+        // Every launch is an operator session, including when the device has
+        // a previously configured administrator. Gear must not be rendered.
         if (title !== 'ZeboVision湿法清洗检测系统' ||
-            monitor !== '检测画面' ||
-            !replace || !gear || !fileInput) {
-          throw new Error('ZeboVision direct-monitor entry screen not rendered')
+            monitor !== '检测画面' || role !== '操作员' ||
+            !replace || gear || !fileInput) {
+          throw new Error('Operator-by-default monitor entry not rendered correctly')
         }
-        return 'ZeboVision direct-monitor entry screen OK'
+        return 'ZeboVision operator monitor entry OK'
       })()`,
       true,
     )

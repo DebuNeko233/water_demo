@@ -1,0 +1,12 @@
+.role-switch{height:33px;display:flex;align-items:center;gap:7px;padding:0 11px;border:1px solid #315a74;border-radius:6px;background:#153045;color:#c4e1ef;white-space:nowrap;font-size:12px;flex-shrink:0;-webkit-app-region:no-drag}
+.role-switch:hover{background:#245372;color:#fff}
+.role-switch svg{height:16px;width:16px;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.role-dialog{width:min(390px,100%);background:linear-gradient(150deg,#132b40,#0a1c2d);color:#e8f2f9;border:1px solid #385c76;border-radius:10px;box-shadow:0 24px 70px #0009}
+.role-dialog-header{display:flex;align-items:center;justify-content:space-between;padding:17px 22px;border-bottom:1px solid #294a60}
+.role-dialog-header h2{font-size:17px;margin:0}
+.role-form{display:flex;flex-direction:column;gap:15px;padding:22px}
+.role-input-label{display:flex;flex-direction:column;gap:8px;font-size:12px;color:#b2ccdc}
+.role-input-label input{width:100%;padding:10px 12px;border-radius:5px;border:1px solid #395a70;background:#081a2a;color:#e9f6ff;font-size:14px}
+.role-password-note{font-size:11px;color:#91aebf;margin:0}
+.role-error{font-size:12px;color:#ff9aa2;margin:0}
+.role-dialog-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:5px}

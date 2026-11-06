@@ -1,6 +1,5 @@
 /** Python owns decoding and inference; UI receives one image/result pair per decoded frame. */
 import { toPlainCalibration } from './detection-payload.mjs'
-import { copyAlgorithmSettings, type AlgorithmSettings } from '../utils/algorithm-settings.mjs'
 import type { DetectionResult, WaferCalibration } from './water-detection'
 
 export interface AnnotatedFrame {
@@ -20,13 +19,14 @@ export interface VideoStreamSession {
   frame: AnnotatedFrame
 }
 export function openPythonVideo(
-  filePath: string, calibration: WaferCalibration, timeS: number, settings: AlgorithmSettings,
+  filePath: string, calibration: WaferCalibration, timeS: number,
 ): Promise<VideoStreamSession> {
   return window.desktop.backend.request<VideoStreamSession>('POST', '/api/video/open', {
     file_path: filePath,
     calibration: toPlainCalibration(calibration),
     start_time_s: timeS,
-    detector: copyAlgorithmSettings(settings),
+    // No client-specified detector configuration. Python resolves the
+    // last administrator-approved settings for every operator session.
   })
 }
 export function readPythonVideoFrame(sessionId: string): Promise<AnnotatedFrame> {
