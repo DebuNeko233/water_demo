@@ -83,7 +83,7 @@ def test_reset_and_malformed_video_frame():
         assert r.json()['status'] == 'WARMUP'
 
 
-def test_time_jump_resets_temporal_history():
+def test_time_gap_does_not_reset_original_water_detector():
     with TestClient(create_app()) as client:
         sid = begin(client)
         for i in range(8):
@@ -94,8 +94,8 @@ def test_time_jump_resets_temporal_history():
             'session_id': sid, 'time_s': 4.0, 'jpeg_base64': make_jpeg(22),
         })
         assert res.status_code == 200
-        assert res.json()['status'] == 'WARMUP'
-        assert len(res.json()['history']) == 1
+        assert res.json()['status'] != 'WARMUP'
+        assert len(res.json()['history']) == 9
 
 def test_custom_algorithm_settings_apply_to_detector_and_reinitialize_history():
     custom = dict(inner_radius_ratio=0.55, outer_radius_ratio=0.98,
@@ -224,10 +224,9 @@ def test_lossless_png_sequence_reaches_real_detector_state():
         assert max(scores) > 0
 
 
-def test_missing_analyzed_video_time_bucket_resets_instead_of_faking_consecutive_frames():
-    # At a target rate of 8 FPS, a 0.375 s gap means multiple 8 Hz
-    # sampling buckets were skipped. The original algorithm assumes
-    # consecutive samples: temporal statistics must be restarted.
+def test_missing_analyzed_video_time_bucket_does_not_restart_original_algorithm():
+    # A skipped frame does not reset the direct main1_chn.py WaterDetector:
+    # each received sample invokes process() once, regardless of timestamp.
     with TestClient(create_app()) as client:
         sid = begin(client)
         for i in range(7):
@@ -241,5 +240,5 @@ def test_missing_analyzed_video_time_bucket_resets_instead_of_faking_consecutive
             'jpeg_base64': make_jpeg(99),
         })
         assert after_gap.status_code == 200
-        assert after_gap.json()['status'] == 'WARMUP'
-        assert len(after_gap.json()['history']) == 1
+        assert after_gap.json()['status'] != 'WARMUP'
+        assert len(after_gap.json()['history']) == 8

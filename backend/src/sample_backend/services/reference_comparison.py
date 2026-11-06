@@ -103,13 +103,10 @@ def run_candidate(samples: list[dict], calib: Calibration,
     h, w = samples[0]['frame'].shape[:2]
     detector = WaterDetector((h, w), SAMPLE_FPS, calib, config)
     output = []
-    last_s = None
     for packet in samples:
         t = packet['time_s']
-        # The live backend reinitializes its history on large video-time gaps.
-        if last_s is not None and (t <= last_s or t-last_s > 1.6 / SAMPLE_FPS):
-            detector = WaterDetector((h, w), SAMPLE_FPS, calib, config)
-        last_s = t
+        # Exact original algorithm: one process() per accepted frame, without
+        # implicit resets due to gaps in video timestamps.
         result = detector.process(packet['frame'])
         output.append({
             'frame_id': packet['frame_id'],
