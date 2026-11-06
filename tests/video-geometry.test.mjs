@@ -54,7 +54,7 @@ test('calibration pointer and ROI use the same fitted viewport for any aspect ra
 test('SVG viewBox has the required x y width height values for both calibration and monitor', () => {
   for (const [width,height] of [[720,576],[1920,1080],[1080,1920]]) {
     const viewBox = sourceViewBox(width,height)
-    const values = viewBox.split(/\\s+/).map(Number)
+    const values = viewBox.split(' ').map(Number)
     assert.deepEqual(values, [0,0,width,height])
   }
   assert.equal(sourceViewBox(0,0),'0 0 1 1')
