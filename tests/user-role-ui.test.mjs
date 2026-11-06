@@ -14,7 +14,7 @@ const auth = read('backend/src/sample_backend/services/user_access.py')
 
 test('operator is the initial role and gear is visible only to admins', () => {
   assert.match(app, /currentRole = ref<UserRole>\('operator'\)/)
-  assert.match(app, /class="algorithm-gear"[^\n]*currentRole === 'admin'/)
+  assert.match(app, /v-if="screen === 'monitor' && currentRole === 'admin'"[^\n]*class="algorithm-gear"/)
   assert.match(app, /currentRole\.value !== 'admin' \|\| !adminToken\.value/)
   assert.match(app, /v-if="algorithmSettingsOpen && currentRole === 'admin'"/)
   assert.match(app, /class="role-switch"/)
