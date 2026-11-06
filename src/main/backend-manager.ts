@@ -189,7 +189,10 @@ export class BackendManager {
       throw new Error('Invalid API path')
     }
     const json = body === undefined ? undefined : JSON.stringify(body)
-    if (json && json.length > 65_536) throw new Error('Request too large')
+    // Detector frame transport contains a JPEG encoded as base64. Keep the
+    // larger payload cap limited to this one trusted local API route.
+    const maxSize = apiPath === '/api/detection/frame' ? 2_750_000 : 65_536
+    if (json && json.length > maxSize) throw new Error('Request too large')
     const response = await fetch(this.baseUrl + apiPath, {
       method,
       headers: {
