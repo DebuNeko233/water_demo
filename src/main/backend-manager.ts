@@ -39,6 +39,8 @@ export class BackendManager {
   private stopping = false
   private currentStatus: BackendStatus = 'starting'
   private latestError = ''
+  private startPromise: Promise<void> | null = null
+  private stderrTail = ''
 
   constructor(private readonly notify: (status: BackendStatus) => void) {}
 
@@ -75,7 +77,17 @@ export class BackendManager {
     return executable
   }
 
-  async start(): Promise<void> {
+  /**
+   * Return the ongoing startup rather than treating an existing child process
+   * as already ready. Requests can await the same handshake promise.
+   */
+  start(): Promise<void> {
+    if (this.startPromise) return this.startPromise
+    this.startPromise = this.startProcess().finally(() => { this.startPromise = null })
+    return this.startPromise
+  }
+
+  private async startProcess(): Promise<void> {
     // 开发时 Python 由单独终端拥有；Electron 只能连接，绝不能代替用户管理它。
     if (!app.isPackaged) {
       this.endpoint = 'http://127.0.0.1:8765'
@@ -90,6 +102,7 @@ export class BackendManager {
     }
     if (this.child || this.stopping) return
     this.change('starting')
+    this.stderrTail = ''
     let python: string
     try {
       python = this.packagedPython()
@@ -106,11 +119,25 @@ export class BackendManager {
     this.sessionToken = randomBytes(32).toString('hex')
     this.controlToken = randomBytes(32).toString('hex')
 
+    // Python startup tracebacks must survive a release-build crash.
+    // Otherwise users see only "backend is not ready" and we cannot diagnose
+    // missing runtimes, file permissions or invalid persisted admin profiles.
+    const logDir = path.join(app.getPath('userData'), 'data', 'logs')
+    const stderrLog = path.join(logDir, 'python-startup.log')
+    try {
+      fs.mkdirSync(logDir, { recursive: true })
+      if (fs.existsSync(stderrLog) && fs.statSync(stderrLog).size > 5 * 1024 * 1024) {
+        fs.rmSync(stderrLog + '.1', { force: true })
+        fs.renameSync(stderrLog, stderrLog + '.1')
+      }
+    } catch (error) {
+      console.warn('Cannot prepare Python startup log:', error)
+    }
     // -I 禁用用户级包路径；APP_PARENT_PID 使 Python 能察觉 Electron 意外退出。
     const child = spawn(python, ['-I', '-m', 'sample_backend'], {
       cwd: path.dirname(python),
       windowsHide: true,
-      stdio: 'ignore',
+      stdio: ['ignore', 'ignore', 'pipe'],
       env: {
         ...process.env,
         APP_PARENT_PID: String(process.pid),
@@ -123,6 +150,11 @@ export class BackendManager {
       },
     })
     this.child = child
+    child.stderr?.on('data', (data: Buffer) => {
+      const chunk = data.toString('utf8')
+      this.stderrTail = (this.stderrTail + chunk).slice(-4000)
+      try { fs.appendFileSync(stderrLog, chunk, 'utf8') } catch { /* optional diagnostics */ }
+    })
     let failure: Error | null = null
     child.on('error', (error) => { failure = error })
     child.once('exit', (code) => {
@@ -141,7 +173,10 @@ export class BackendManager {
       const deadline = Date.now() + 30_000
       while (Date.now() < deadline && !this.stopping) {
         if (failure) throw failure
-        if (exited(child)) throw new Error('Python exited before becoming ready')
+        if (exited(child)) {
+          throw new Error('Python exited before becoming ready (exit=' +
+            String(child.exitCode) + ', signal=' + String(child.signalCode) + ')')
+        }
         if (fs.existsSync(this.readyFile)) {
           const ready = JSON.parse(fs.readFileSync(this.readyFile, 'utf8')) as ReadyMessage
           if (ready.pid !== child.pid || ready.session_id !== sessionId ||
@@ -149,20 +184,29 @@ export class BackendManager {
             throw new Error('Invalid Python startup handshake')
           }
           this.endpoint = 'http://127.0.0.1:' + ready.port
-          // 有就绪文件不等于 HTTP 已可用；健康检查成功后才报告 ready。
-          await this.health()
-          this.change('ready')
-          return
+          // Python may have bound the socket but still be completing its
+          // FastAPI startup. Retry health until the deadline rather than
+          // failing the whole backend on one short timeout.
+          try {
+            await this.health()
+            this.change('ready')
+            return
+          } catch {
+            await pause(150)
+            continue
+          }
         }
         await pause(150)
       }
       throw new Error('Python startup timeout')
     } catch (error) {
       console.error('Python startup failed:', error)
-      this.latestError = String(error)
+      const detail = this.stderrTail.trim().slice(-1500)
+      this.latestError = String(error) + (detail ? '\n' + detail : '') +
+        '\n请打开应用日志目录中的 python-startup.log 查看详细信息'
       await this.stop()
       this.change('failed')
-      throw error
+      throw new Error(this.latestError)
     } finally {
       this.removeReadyFile()
     }
@@ -193,6 +237,16 @@ export class BackendManager {
     // larger payload cap limited to this one trusted local API route.
     const maxSize = apiPath === '/api/detection/frame' ? 25_000_000 : 65_536
     if (json && json.length > maxSize) throw new Error('Request too large')
+    // The app opens the monitor window *before* the managed Python has
+    // completed its handshake. Await startup to avoid an immediate false
+    // "not ready" error when a user picks a video promptly after launch.
+    if (this.startPromise) {
+      try { await this.startPromise } catch { /* surfaced below with diagnostics */ }
+    }
+    if (this.currentStatus !== 'ready' || !this.endpoint) {
+      throw new Error('Python 后端未就绪（' + this.currentStatus + '）：' +
+        (this.latestError || '尚未完成启动') + '。请点击「重新连接」或查看日志')
+    }
     const response = await fetch(this.baseUrl + apiPath, {
       method,
       headers: {
