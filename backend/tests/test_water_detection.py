@@ -148,3 +148,26 @@ def test_invalid_algorithm_settings_are_rejected_before_detection_start():
             r = client.post('/api/detection/start', json={**base, 'detector': bad})
             assert r.status_code == 422, (bad, r.text)
         assert client.post('/api/detection/start', json=base).status_code == 200
+
+
+def test_default_parameters_match_original_main1_chn_demo_config():
+    """The API defaults must not drift from the source detector defaults."""
+    from sample_backend.services.water_detection import DemoConfig
+    from sample_backend.services.water_session import DetectorSettings
+
+    defaults = DetectorSettings().model_dump()
+    original = DemoConfig()
+    assert defaults == {key: getattr(original, key) for key in defaults}
+    assert defaults == {
+        "inner_radius_ratio": 0.65,
+        "outer_radius_ratio": 0.95,
+        "diff_threshold": 8.0,
+        "history_seconds": 0.50,
+        "persistence_threshold": 0.50,
+        "s_water_threshold": 0.025,
+        "ng_hold_seconds": 0.50,
+        "recover_hold_seconds": 0.60,
+        "sector_count": 24,
+        "sector_threshold": 0.05,
+        "blur_ksize": 3,
+    }
