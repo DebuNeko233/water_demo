@@ -25,6 +25,9 @@ export function useWaterDetection(videoRef: Ref<HTMLVideoElement | null>) {
   let callbackId: number | null = null
   let fallbackTimer: ReturnType<typeof setInterval> | null = null
   let currentCalibration: WaferCalibration | null = null
+  // Serialize session creation so rapid seeks cannot let an older HTTP start
+  // overwrite the latest session in the Python singleton.
+  let startChain: Promise<void> = Promise.resolve()
   const canvas = document.createElement('canvas')
   const context = canvas.getContext('2d', { alpha: false })
 
@@ -59,7 +62,9 @@ export function useWaterDetection(videoRef: Ref<HTMLVideoElement | null>) {
       return
     }
     try {
-      const session = await beginDetection(calibration)
+      const pendingStart = startChain.then(() => beginDetection(calibration))
+      startChain = pendingStart.then(() => undefined, () => undefined)
+      const session = await pendingStart
       if (version !== epoch) return
       sessionId = session.session_id
       sourceFrameRate.value = session.sample_fps
