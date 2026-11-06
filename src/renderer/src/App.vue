@@ -5,6 +5,11 @@ import { seekToReferenceFrame } from './utils/videoPlayback.mjs'
 import { svgSourceToClient } from './utils/svgCoordinates.mjs'
 import { calibrationPointerToSource } from './utils/calibrationPointer.mjs'
 import { useWaterDetection } from './composables/useWaterDetection'
+import AlgorithmSettingsModal from './components/AlgorithmSettingsModal.vue'
+import {
+  copyAlgorithmSettings, readAlgorithmSettings, storeAlgorithmSettings,
+  type AlgorithmSettings,
+} from './utils/algorithm-settings.mjs'
 
 type Point = { x: number; y: number }
 type Calibration = { cx: number; cy: number; radius: number; width: number; height: number }
@@ -29,7 +34,13 @@ const screen = ref<Screen>('welcome')
 const fileInput = ref<HTMLInputElement | null>(null)
 const calibrationVideo = ref<HTMLVideoElement | null>(null)
 const monitorVideo = ref<HTMLVideoElement | null>(null)
-const detection = useWaterDetection(monitorVideo)
+function settingsStorage(): Storage | undefined {
+  try { return window.localStorage } catch { return undefined }
+}
+const algorithmSettings = ref<AlgorithmSettings>(readAlgorithmSettings(settingsStorage()))
+const algorithmSettingsOpen = ref(false)
+let settingsResumePlayback = false
+const detection = useWaterDetection(monitorVideo, algorithmSettings)
 const detectorResult = detection.result
 const detectorStatus = detection.status
 const detectorError = detection.error
@@ -85,7 +96,11 @@ const calibrationMeasure = computed(() => {
 const previewUrl = computed(() => pendingUrl.value || activeUrl.value)
 const overlaySize = computed(() => sourceViewBox(videoWidth.value, videoHeight.value))
 const draftOverlaySize = computed(() => sourceViewBox(draftWidth.value, draftHeight.value))
-const detectionThreshold = computed(() => detectorResult.value?.s_water_threshold ?? 0.025)
+const detectionThreshold = computed(() => detectorResult.value?.s_water_threshold ?? algorithmSettings.value.s_water_threshold)
+const sectorThreshold = computed(() => detectorResult.value?.sector_threshold ?? algorithmSettings.value.sector_threshold)
+const sectorCount = computed(() => detectorResult.value?.sector_count ?? algorithmSettings.value.sector_count)
+const innerRadiusRatio = computed(() => detectorResult.value?.inner_radius_ratio ?? algorithmSettings.value.inner_radius_ratio)
+const outerRadiusRatio = computed(() => detectorResult.value?.outer_radius_ratio ?? algorithmSettings.value.outer_radius_ratio)
 const resultStatus = computed(() => {
   if (detectorStatus.value === 'error') return 'ERROR'
   if (detectorStatus.value === 'connecting') return '连接中'
@@ -103,8 +118,8 @@ const resultDescription = computed(() => {
 const worstSector = computed(() => {
   const idx = detectorResult.value?.max_sector_idx ?? -1
   return idx < 0 || !detectorResult.value ||
-    detectorResult.value.max_sector_score < detectorResult.value.sector_threshold
-    ? '--' : `${idx + 1} · ${Math.round(idx * 360 / 24)}°`
+    detectorResult.value.max_sector_score < sectorThreshold.value
+    ? '--' : `${idx + 1} · ${Math.round(idx * 360 / sectorCount.value)}°`
 })
 const chartMaximum = computed(() => {
   const points = detectorResult.value?.history ?? []
@@ -166,13 +181,13 @@ watch(monitorStage, (node) => {
 const sectors = computed(() => {
   const c = calibration.value
   if (!c) return []
-  return Array.from({ length: 24 }, (_, i) => {
-    const angle = i * Math.PI / 12
+  return Array.from({ length: sectorCount.value }, (_, i) => {
+    const angle = i * 2 * Math.PI / sectorCount.value
     return {
-      x1: c.cx + c.radius * .65 * Math.cos(angle),
-      y1: c.cy + c.radius * .65 * Math.sin(angle),
-      x2: c.cx + c.radius * .95 * Math.cos(angle),
-      y2: c.cy + c.radius * .95 * Math.sin(angle),
+      x1: c.cx + c.radius * innerRadiusRatio.value * Math.cos(angle),
+      y1: c.cy + c.radius * innerRadiusRatio.value * Math.sin(angle),
+      x2: c.cx + c.radius * outerRadiusRatio.value * Math.cos(angle),
+      y2: c.cy + c.radius * outerRadiusRatio.value * Math.sin(angle),
     }
   })
 })
@@ -469,8 +484,43 @@ function windowAction(action: 'minimize' | 'toggleMaximize' | 'closeWindow'): vo
   if (!desktop?.system) return
   void desktop.system[action]()
 }
+function openAlgorithmSettings(): void {
+  if (screen.value !== 'monitor' || algorithmSettingsOpen.value || modalOpen.value) return
+  const video = monitorVideo.value
+  settingsResumePlayback = Boolean(video && !video.paused)
+  video?.pause()
+  algorithmSettingsOpen.value = true
+}
+function resumeAfterSettings(): void {
+  if (!settingsResumePlayback) return
+  settingsResumePlayback = false
+  const video = monitorVideo.value
+  if (video) void video.play().catch(() => notify('视频无法继续播放'))
+}
+function cancelAlgorithmSettings(): void {
+  algorithmSettingsOpen.value = false
+  resumeAfterSettings()
+}
+function applyAlgorithmSettings(next: AlgorithmSettings): void {
+  const values = copyAlgorithmSettings(next)
+  algorithmSettings.value = values
+  algorithmSettingsOpen.value = false
+  try {
+    storeAlgorithmSettings(settingsStorage(), values)
+    notify('算法参数已应用')
+  } catch {
+    notify('参数已应用，本地持久保存失败')
+  }
+  // A detector's history and NG hysteresis cannot carry across configuration
+  // changes. The live video stays on the current frame while this resets.
+  if (calibration.value) void detection.start(calibration.value)
+  resumeAfterSettings()
+}
+
 function onEscape(event: KeyboardEvent): void {
-  if (event.key === 'Escape' && modalOpen.value) closeCalibration()
+  if (event.key !== 'Escape') return
+  if (algorithmSettingsOpen.value) cancelAlgorithmSettings()
+  else if (modalOpen.value) closeCalibration()
 }
 onMounted(() => { window.addEventListener('keydown', onEscape) })
 onBeforeUnmount(() => {
@@ -494,6 +544,12 @@ onBeforeUnmount(() => {
       <div class="app-title">ZeboVision湿法清洗检测系统</div>
       <div class="header-actions">
         <span v-if="screen === 'monitor'" class="header-status"><i class="status-dot"/>本地视频</span>
+        <button v-if="screen === 'monitor'" type="button" class="algorithm-gear" title="算法参数设置" aria-label="算法参数设置" @click="openAlgorithmSettings">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="3.5"/>
+            <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1"/>
+          </svg>
+        </button>
         <div class="window-controls">
           <button type="button" title="最小化" aria-label="最小化" @click="windowAction('minimize')">—</button>
           <button type="button" title="最大化或还原" aria-label="最大化或还原" @click="windowAction('toggleMaximize')">□</button>
@@ -522,14 +578,14 @@ onBeforeUnmount(() => {
               <video ref="monitorVideo" class="video-element" :src="activeUrl" playsinline preload="metadata" @loadedmetadata="onMainMetadata" @loadeddata="onMainFrameReady" @timeupdate="onMainTime" @play="onMainPlay" @pause="onMainPause" @ended="onMainPause" @seeking="onMainSeeking" @seeked="onMainSeeked" @error="videoError = '视频解码失败，请更换其他格式的视频'" />
               <svg v-if="calibration" class="roi-overlay" :viewBox="overlaySize" preserveAspectRatio="none" aria-hidden="true">
                 <circle :cx="calibration.cx" :cy="calibration.cy" :r="calibration.radius" class="wafer-outline"/>
-                <circle :cx="calibration.cx" :cy="calibration.cy" :r="calibration.radius * .95" class="ring-outer"/>
-                <circle :cx="calibration.cx" :cy="calibration.cy" :r="calibration.radius * .65" class="ring-inner"/>
-                <line v-for="(sector, i) in sectors" :key="i" :x1="sector.x1" :y1="sector.y1" :x2="sector.x2" :y2="sector.y2" class="sector-line" :class="{ 'sector-hot': detectorResult && detectorResult.sector_scores[i] >= detectorResult.sector_threshold }"/>
+                <circle :cx="calibration.cx" :cy="calibration.cy" :r="calibration.radius * outerRadiusRatio" class="ring-outer"/>
+                <circle :cx="calibration.cx" :cy="calibration.cy" :r="calibration.radius * innerRadiusRatio" class="ring-inner"/>
+                <line v-for="(sector, i) in sectors" :key="i" :x1="sector.x1" :y1="sector.y1" :x2="sector.x2" :y2="sector.y2" class="sector-line" :class="{ 'sector-hot': detectorResult && detectorResult.sector_scores[i] >= sectorThreshold }"/>
                 <path :d="`M ${calibration.cx-9} ${calibration.cy} h18 M ${calibration.cx} ${calibration.cy-9} v18`" class="center-mark"/>
               </svg>
             </div>
             <span class="viewport-label">检测画面</span>
-            <span class="video-legend">参考帧 {{ formatTime(calibrationFrameTime) }} · 白色虚线：晶圆边缘 R　绿色：0.95R　蓝色：0.65R</span>
+            <span class="video-legend">参考帧 {{ formatTime(calibrationFrameTime) }} · 白色虚线：晶圆边缘 R　绿色：{{ outerRadiusRatio.toFixed(2) }}R　蓝色：{{ innerRadiusRatio.toFixed(2) }}R</span>
             <div v-if="videoError" class="video-error">{{ videoError }}</div>
           </div>
           <div class="video-footer">
@@ -541,7 +597,7 @@ onBeforeUnmount(() => {
 
         <div class="right-column">
           <section class="panel result-panel"><div><div class="data-label">当前检测结果</div><div class="status-unavailable" :class="{ 'status-good': resultStatus === 'OK', 'status-bad': resultStatus === 'NG', 'status-error': resultStatus === 'ERROR' }">{{ resultStatus }}</div><div class="status-description" :title="resultDescription">{{ resultDescription }}</div></div><div class="result-divider"/><div><div class="data-label">S_water · 当前值</div><div class="result-score">{{ detectorResult ? detectorResult.s_water.toFixed(4) : '--' }}</div><div class="data-note">原算法 · {{ analysisFPS }} FPS 抽帧</div><div class="threshold-line">阈值 <b>{{ detectionThreshold.toFixed(4) }}</b></div></div></section>
-          <section class="panel data-panel"><div class="panel-heading"><span class="panel-title">检测数据</span></div><div class="data-grid"><div class="metric"><div class="data-label">运行时间</div><div class="metric-value">{{ currentTime.toFixed(2) }} <small>s</small></div></div><div class="metric"><div class="data-label">S_water</div><div class="metric-value metric-blue">{{ detectorResult ? detectorResult.s_water.toFixed(4) : '--' }}</div></div><div class="metric"><div class="data-label">NG 阈值</div><div class="metric-value metric-orange">{{ detectionThreshold.toFixed(4) }}</div></div><div class="metric"><div class="data-label">异常持续时间</div><div class="metric-value">{{ detectorResult ? detectorResult.abnormal_run_s.toFixed(2) : '--' }} <small>s</small></div></div><div class="metric"><div class="data-label">异常扇区</div><div class="metric-value">{{ worstSector }}</div></div><div class="metric"><div class="data-label">扇区最大值</div><div class="metric-value">{{ detectorResult ? detectorResult.max_sector_score.toFixed(4) : '--' }}</div></div></div><div class="sector-summary"><span>检测区域</span><strong>0.65R — 0.95R · 24 扇区</strong></div></section>
+          <section class="panel data-panel"><div class="panel-heading"><span class="panel-title">检测数据</span></div><div class="data-grid"><div class="metric"><div class="data-label">运行时间</div><div class="metric-value">{{ currentTime.toFixed(2) }} <small>s</small></div></div><div class="metric"><div class="data-label">S_water</div><div class="metric-value metric-blue">{{ detectorResult ? detectorResult.s_water.toFixed(4) : '--' }}</div></div><div class="metric"><div class="data-label">NG 阈值</div><div class="metric-value metric-orange">{{ detectionThreshold.toFixed(4) }}</div></div><div class="metric"><div class="data-label">异常持续时间</div><div class="metric-value">{{ detectorResult ? detectorResult.abnormal_run_s.toFixed(2) : '--' }} <small>s</small></div></div><div class="metric"><div class="data-label">异常扇区</div><div class="metric-value">{{ worstSector }}</div></div><div class="metric"><div class="data-label">扇区最大值</div><div class="metric-value">{{ detectorResult ? detectorResult.max_sector_score.toFixed(4) : '--' }}</div></div></div><div class="sector-summary"><span>检测区域</span><strong>{{ innerRadiusRatio.toFixed(2) }}R — {{ outerRadiusRatio.toFixed(2) }}R · {{ sectorCount }} 扇区</strong></div></section>
           <section class="panel chart-panel"><div class="panel-heading"><span class="panel-title">S_water 历史曲线</span><span class="chart-legend"><i/> S_water　 <b>┄</b> NG 阈值</span></div><div class="chart-body"><svg viewBox="0 0 520 140" preserveAspectRatio="none" role="img" aria-label="实时水流异常检测历史曲线"><path d="M50 18H510 M50 66H510 M50 115H510" class="chart-grid"/><path :d="`M50 ${chartThresholdY}H510`" class="chart-threshold"/><polyline v-if="chartPoints" :points="chartPoints" class="chart-series"/><text x="5" y="20">{{ chartMaximum.toFixed(3) }}</text><text x="5" :y="chartThresholdY + 2">{{ detectionThreshold.toFixed(3) }}</text><text x="5" y="118">0.000</text><text x="50" y="133">-5s</text><text x="480" y="133">当前</text><text v-if="!chartPoints" x="285" y="99" class="chart-empty">等待检测数据</text></svg></div></section>
         </div>
       </main>
@@ -549,10 +605,11 @@ onBeforeUnmount(() => {
     </template>
 
     <input ref="fileInput" class="hidden-input" type="file" accept="video/*,.mp4,.mov,.avi,.mkv,.webm,.m4v" aria-label="选择视频文件" @change="onFileChange"/>
+    <AlgorithmSettingsModal v-if="algorithmSettingsOpen" :settings="algorithmSettings" @cancel="cancelAlgorithmSettings" @save="applyAlgorithmSettings"/>
     <div v-if="modalOpen" class="modal-mask" @click.self="closeCalibration">
       <section class="calibration-modal" role="dialog" aria-modal="true" aria-labelledby="calibration-title">
         <div class="modal-header"><div><h2 id="calibration-title">标注晶圆位置</h2><p>点击画面中的晶圆中心，再点击晶圆边缘</p></div><div class="modal-header-actions"><button v-if="false" type="button" class="coordinate-toggle" :aria-pressed="coordinateCheckEnabled" @click="coordinateCheckEnabled = !coordinateCheckEnabled">{{ coordinateCheckEnabled ? '坐标校验：开' : '坐标校验：关' }}</button><button type="button" class="modal-close" title="取消标注" aria-label="取消标注" @click="closeCalibration">×</button></div></div>
-        <div class="modal-body"><div ref="calibrationStage" class="calibration-stage" :class="{ 'stage-ready': !!draftWidth }"><div class="video-fit calibration-fit" :style="calibrationViewportStyle" @click="onCalibrationClick"><video ref="calibrationVideo" :src="previewUrl" playsinline muted preload="metadata" @loadedmetadata="onCalibrationMetadata" @loadeddata="onCalibrationFrameReady" @timeupdate="onCalibrationTime" @seeking="calibrationFrameReady = false" @seeked="onCalibrationFrameReady" @error="notify('无法读取视频，请尝试其他格式')"/><svg ref="calibrationSvg" class="roi-overlay" :viewBox="draftOverlaySize" preserveAspectRatio="none" aria-hidden="true"><template v-if="center"><path :d="`M ${center.x-13} ${center.y} h26 M ${center.x} ${center.y-13} v26`" class="calib-cross"/><circle :cx="center.x" :cy="center.y" r="4" fill="#59d7ff"/></template><template v-if="draftCalibration"><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius" class="calib-wafer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * .95" class="ring-outer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * .65" class="ring-inner"/></template></svg></div><div class="frame-label">灰色虚线：晶圆边缘 R　绿色：0.95R　蓝色：0.65R</div></div>
+        <div class="modal-body"><div ref="calibrationStage" class="calibration-stage" :class="{ 'stage-ready': !!draftWidth }"><div class="video-fit calibration-fit" :style="calibrationViewportStyle" @click="onCalibrationClick"><video ref="calibrationVideo" :src="previewUrl" playsinline muted preload="metadata" @loadedmetadata="onCalibrationMetadata" @loadeddata="onCalibrationFrameReady" @timeupdate="onCalibrationTime" @seeking="calibrationFrameReady = false" @seeked="onCalibrationFrameReady" @error="notify('无法读取视频，请尝试其他格式')"/><svg ref="calibrationSvg" class="roi-overlay" :viewBox="draftOverlaySize" preserveAspectRatio="none" aria-hidden="true"><template v-if="center"><path :d="`M ${center.x-13} ${center.y} h26 M ${center.x} ${center.y-13} v26`" class="calib-cross"/><circle :cx="center.x" :cy="center.y" r="4" fill="#59d7ff"/></template><template v-if="draftCalibration"><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius" class="calib-wafer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * outerRadiusRatio" class="ring-outer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * innerRadiusRatio" class="ring-inner"/></template></svg></div><div class="frame-label">灰色虚线：晶圆边缘 R　绿色：{{ outerRadiusRatio.toFixed(2) }}R　蓝色：{{ innerRadiusRatio.toFixed(2) }}R</div></div>
           <div class="calib-timeline"><span>定位画面</span><input type="range" aria-label="标注画面位置" min="0" :max="calibrationDuration || 1" step="0.01" :value="calibrationTime" :style="{ '--progress': calibrationProgress + '%' }" :disabled="!calibrationDuration" @input="onCalibrationSeek"/><span>{{ formatTime(calibrationTime) }} / {{ formatTime(calibrationDuration) }}</span></div>
           <div class="calibration-status"><strong>{{ calibrationPhase }}</strong><span>{{ calibrationMeasure }}</span></div>
           <div v-if="coordinateCheckEnabled" class="coordinate-debug">
