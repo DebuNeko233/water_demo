@@ -10,6 +10,7 @@ from loguru import logger
 from .api.control import router as control_router
 from .api.detection import router as detection_router
 from .api.video import router as video_router
+from .api.users import router as users_router
 from .api.routes import router as api_router
 from .api.websocket import router as websocket_router
 from .core.config import session_token
@@ -17,6 +18,7 @@ from .core.logging import configure_logging
 from .services.demo_jobs import DemoJobs
 from .services.water_session import WaterDetectionSession
 from .services.video_stream import PythonVideoStream
+from .services.user_access import LocalUserAccess
 from .services.event_hub import EventHub
 
 
@@ -28,6 +30,7 @@ async def lifespan(app: FastAPI):
     app.state.jobs = DemoJobs(app.state.events.publish)
     app.state.water_detector = WaterDetectionSession()
     app.state.video_stream = PythonVideoStream()
+    app.state.user_access = LocalUserAccess()
     logger.info("FastAPI is starting")
     try:
         yield
@@ -56,6 +59,7 @@ def create_app() -> FastAPI:
     app.include_router(api_router)
     app.include_router(detection_router)
     app.include_router(video_router)
+    app.include_router(users_router)
     app.include_router(websocket_router)
     app.include_router(control_router)
     return app

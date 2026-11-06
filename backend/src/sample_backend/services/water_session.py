@@ -54,7 +54,8 @@ class StartInput(BaseModel):
     calibration: CalibrationInput
     # These are *analyzed* frame samples per second, not the video's native FPS.
     sample_fps: float = Field(default=8.0, ge=8.0, le=8.0)
-    detector: DetectorSettings = Field(default_factory=DetectorSettings)
+    detector: DetectorSettings | None = None
+    admin_token: str | None = Field(default=None, max_length=128)
 
 
 class FrameInput(BaseModel):
@@ -97,7 +98,7 @@ class WaterDetectionSession:
         if cal.width * cal.height > 4_194_304:
             raise ValueError('Video exceeds the real-time detection size limit (4.2 megapixels)')
         with self._lock:
-            self._config = DemoConfig(**config.detector.model_dump())  # Validated, user-selected algorithm settings.
+            self._config = DemoConfig(**(config.detector or DetectorSettings()).model_dump())
             detector = WaterDetector(
                 (cal.height, cal.width), config.sample_fps,
                 Calibration(cal.cx, cal.cy, cal.radius), self._config,

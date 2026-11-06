@@ -27,7 +27,8 @@ class VideoOpenInput(BaseModel):
     file_path: str = Field(min_length=1, max_length=4096)
     calibration: CalibrationInput
     start_time_s: float = Field(default=0.0, ge=0.0, le=86400, allow_inf_nan=False)
-    detector: DetectorSettings = Field(default_factory=DetectorSettings)
+    detector: DetectorSettings | None = None
+    admin_token: str | None = Field(default=None, max_length=128)
 
 
 class VideoNextInput(BaseModel):
@@ -90,7 +91,9 @@ class PythonVideoStream:
                 raise InvalidFrame('Video dimensions differ from wafer calibration or are too large')
             if not math.isfinite(fps) or not 1 <= fps <= 240:
                 raise InvalidFrame('Unable to determine source video FPS')
-            cfg = DemoConfig(**req.detector.model_dump())
+            # API route resolves the approved, persistent settings; direct
+            # callers without an override use original DemoConfig defaults.
+            cfg = DemoConfig(**(req.detector or DetectorSettings()).model_dump())
             detector = WaterDetector((height, width), fps,
                                      Calibration(cal.cx, cal.cy, cal.radius), cfg)
             with self._lock:
