@@ -5,6 +5,7 @@
  * instead of letting old results drift far behind the video timeline.
  */
 import { onBeforeUnmount, ref, type Ref } from 'vue'
+import { copyAlgorithmSettings, type AlgorithmSettings } from '../utils/algorithm-settings.mjs'
 import {
   ANALYSIS_FPS, analyzeVideoFrame, beginDetection,
   type DetectionResult, type WaferCalibration,
@@ -12,7 +13,7 @@ import {
 
 export type InspectionConnection = 'idle' | 'connecting' | 'warming' | 'running' | 'error'
 
-export function useWaterDetection(videoRef: Ref<HTMLVideoElement | null>) {
+export function useWaterDetection(videoRef: Ref<HTMLVideoElement | null>, settingsRef: Readonly<Ref<AlgorithmSettings>>) {
   const status = ref<InspectionConnection>('idle')
   const result = ref<DetectionResult | null>(null)
   const error = ref('')
@@ -61,6 +62,8 @@ export function useWaterDetection(videoRef: Ref<HTMLVideoElement | null>) {
       height: calibration.height,
     }
     currentCalibration = snapshot
+    // Freeze each queued start's settings; never forward a reactive proxy via IPC.
+    const settingsSnapshot = copyAlgorithmSettings(settingsRef.value)
     const version = epoch
     status.value = 'connecting'
     if (!context) {
@@ -69,7 +72,7 @@ export function useWaterDetection(videoRef: Ref<HTMLVideoElement | null>) {
       return
     }
     try {
-      const pendingStart = startChain.then(() => beginDetection(snapshot))
+      const pendingStart = startChain.then(() => beginDetection(snapshot, settingsSnapshot))
       startChain = pendingStart.then(() => undefined, () => undefined)
       const session = await pendingStart
       if (version !== epoch) return

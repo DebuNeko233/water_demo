@@ -2,6 +2,7 @@
  * Python WaterDetector (from main1_chn.py) owns all scoring and NG hysteresis.
  */
 import { toPlainCalibration } from './detection-payload.mjs'
+import { copyAlgorithmSettings, type AlgorithmSettings } from '../utils/algorithm-settings.mjs'
 
 export const ANALYSIS_FPS = 8
 
@@ -20,6 +21,8 @@ export interface DetectionSession {
   sector_threshold: number
   history_seconds: number
   sector_count: number
+  inner_radius_ratio: number
+  outer_radius_ratio: number
 }
 
 export interface DetectionHistoryPoint {
@@ -34,6 +37,9 @@ export interface DetectionResult {
   history_ready: boolean
   s_water_threshold: number
   sector_threshold: number
+  sector_count: number
+  inner_radius_ratio: number
+  outer_radius_ratio: number
   max_sector_idx: number
   max_sector_score: number
   sector_scores: number[]
@@ -42,10 +48,11 @@ export interface DetectionResult {
   history: DetectionHistoryPoint[]
 }
 
-export async function beginDetection(calibration: WaferCalibration): Promise<DetectionSession> {
+export async function beginDetection(calibration: WaferCalibration, settings: AlgorithmSettings): Promise<DetectionSession> {
   return window.desktop.backend.request<DetectionSession>('POST', '/api/detection/start', {
     calibration: toPlainCalibration(calibration),
     sample_fps: ANALYSIS_FPS,
+    detector: copyAlgorithmSettings(settings),
   })
 }
 
