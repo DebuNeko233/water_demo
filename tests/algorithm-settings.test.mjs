@@ -42,3 +42,22 @@ test('settings round-trip without sharing mutable proxy objects', () => {
   assert.doesNotThrow(() => structuredClone(loaded))
   assert.equal(readAlgorithmSettings({getItem: () => 'corrupt'}).sector_count, 24)
 })
+
+
+test('all 11 default values match the active DemoConfig in uploaded main1_chn.py', () => {
+  assert.deepEqual({...DEFAULT_ALGORITHM_SETTINGS}, {
+    inner_radius_ratio: 0.65,
+    outer_radius_ratio: 0.95,
+    diff_threshold: 8.0,
+    history_seconds: 0.50,
+    persistence_threshold: 0.50,
+    s_water_threshold: 0.025,
+    ng_hold_seconds: 0.50,
+    recover_hold_seconds: 0.60,
+    sector_count: 24,
+    sector_threshold: 0.05,
+    blur_ksize: 3,
+  })
+  assert.deepEqual(readAlgorithmSettings({ getItem: () => null }),
+    {...DEFAULT_ALGORITHM_SETTINGS})
+})
