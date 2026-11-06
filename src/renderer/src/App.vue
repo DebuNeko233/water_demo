@@ -4,6 +4,7 @@ import { containRect, viewportToVideo, sourceViewBox } from './utils/videoGeomet
 import { svgSourceToClient } from './utils/svgCoordinates.mjs'
 import { calibrationPointerToSource } from './utils/calibrationPointer.mjs'
 import { usePythonVideoStream } from './composables/usePythonVideoStream'
+import { useBackendConnection } from './composables/useBackendConnection'
 import AlgorithmSettingsModal from './components/AlgorithmSettingsModal.vue'
 import AdminAccessDialog from './components/AdminAccessDialog.vue'
 import {
@@ -53,6 +54,10 @@ let unsubscribeBackendStatus: (() => void) | undefined
 const algorithmSettingsOpen = ref(false)
 let settingsResumePlayback = false
 const detection = usePythonVideoStream()
+const {
+  status: backendStatus, diagnostic: backendDiagnostic,
+  retrying: backendRetrying, retry: retryBackendConnection,
+} = useBackendConnection()
 const renderedFrame = detection.renderedFrame
 const detectorResult = detection.result
 const detectorStatus = detection.status
@@ -205,6 +210,16 @@ function formatTime(value: number): string {
   if (!Number.isFinite(value)) return '00:00'
   const seconds = Math.max(0, Math.floor(value))
   return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
+}
+async function recoverPythonBackend(): Promise<void> {
+  await retryBackendConnection()
+  if (await window.desktop.backend.status() === 'ready' &&
+      calibration.value && activeVideoPath.value) {
+    await detection.open(activeVideoPath.value, calibration.value, currentTime.value)
+  }
+}
+function openPythonLogs(): void {
+  void window.desktop.system.openLogs('python')
 }
 function chooseVideo(): void {
   if (!fileInput.value) return
@@ -627,7 +642,17 @@ onBeforeUnmount(() => {
             <div class="video-fit" :style="monitorViewportStyle">
               <img v-if="renderedFrame" class="video-element" :src="renderedFrame" alt="Python 逐帧推理后的检测画面"/>
             </div>
-            <div v-if="videoError" class="video-error">{{ videoError }}</div>
+            <div v-if="backendStatus === 'failed' || backendStatus === 'offline'" class="backend-recovery">
+              <strong>Python 后端未连接</strong>
+              <p>{{ backendDiagnostic || '请重新连接或查看日志' }}</p>
+              <div class="backend-recovery-actions">
+                <button class="btn btn-primary" :disabled="backendRetrying" @click="recoverPythonBackend">
+                  {{ backendRetrying ? '连接中…' : '重新连接' }}
+                </button>
+                <button class="btn btn-muted" @click="openPythonLogs">打开日志目录</button>
+              </div>
+            </div>
+            <div v-else-if="videoError" class="video-error">{{ videoError }}</div>
           </div>
           <div class="video-footer">
             <input class="progress-range" type="range" aria-label="视频播放进度" min="0" :max="duration || 1" step="0.01" :value="shownTime" :style="{ '--progress': progress + '%' }" :disabled="!duration" @input="onMainSeek" @change="onMainSeekEnd"/>
