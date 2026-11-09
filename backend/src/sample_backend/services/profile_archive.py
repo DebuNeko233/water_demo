@@ -16,6 +16,8 @@ import zipfile
 from pathlib import Path
 from uuid import uuid4
 
+import cv2
+import numpy as np
 from pydantic import ValidationError
 
 from .station_position import STAGES, MAX_REFS, StageProfileStore
@@ -122,6 +124,9 @@ def _validate_archive(source: Path) -> tuple[dict, DetectorSettings, dict[str, b
                 if (len(raw) < 24 or not raw.startswith(PNG_SIGNATURE)
                         or struct.unpack(">II", raw[16:24]) != (width, height)):
                     raise InvalidFrame("参考帧 PNG 格式或分辨率不匹配")
+                decoded = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
+                if decoded is None or decoded.shape[:2] != (height, width):
+                    raise InvalidFrame("参考帧 PNG 已损坏或无法解码")
                 images[ident] = raw
             return profile, settings, images
     except (zipfile.BadZipFile, zipfile.LargeZipFile, json.JSONDecodeError,
@@ -191,6 +196,11 @@ def import_profile_archive(store: StageProfileStore, access: LocalUserAccess,
                 shutil.rmtree(staging)
         # Old profiles are removed only after both ROI and detector settings
         # have been committed. A failed import rolls back to the old setup.
-        shutil.rmtree(backup)
+        try:
+            shutil.rmtree(backup)
+        except OSError:
+            # The import is already committed; a failed cleanup must not
+            # report that the restore itself failed.
+            pass
         return {"profile": store.snapshot(), "settings": settings.model_dump(),
                 "reference_count": len(images)}
