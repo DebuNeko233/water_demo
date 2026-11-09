@@ -74,6 +74,8 @@
 .station-mode-tabs,.station-tabs{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
 .station-mode-tabs{margin:0 2px 12px}
 .station-tabs{margin-bottom:10px}
+.station-archive-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 2px 12px}
+.station-archive-actions .btn{min-height:36px}
 .station-nozzle-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 10px}
 .station-nozzle-tabs button{min-width:110px;min-height:36px;border:1px solid #34566e;background:#10293d;color:#adc8d8;border-radius:6px;padding:7px 12px;font-size:12px}
 .station-nozzle-tabs button.active{background:#205676;border-color:#45a6db;color:#fff}
