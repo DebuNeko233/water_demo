@@ -68,3 +68,20 @@
 .status-description{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chart-series{fill:none;stroke:#4ed1ff;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke}
 .sector-hot{stroke:#ff6978!important;stroke-width:3!important}
+
+/* Three-station setup is compact and remains usable on smaller desktop windows. */
+.calibration-modal .modal-body{overflow-y:auto;overscroll-behavior:contain}
+.station-mode-tabs,.station-tabs{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.station-mode-tabs{margin:0 2px 12px}
+.station-tabs{margin-bottom:10px}
+.station-mode-tabs button,.station-tabs button{border:1px solid #34566e;color:#adc8d8;background:#0b2234;border-radius:6px;padding:8px 13px;font-size:12px;cursor:pointer}
+.station-mode-tabs button.active,.station-tabs button.active{background:#174968;color:#effaff;border-color:#3292cb}
+.station-tabs button small{color:#82bfdc;margin-left:6px;font-size:11px}
+.station-setup{background:#0c1e30;border:1px solid #2e536a;border-radius:7px;padding:10px 12px;margin-bottom:12px;flex-shrink:0}
+.station-reference-controls{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:11px;color:#9bb4c5}
+.station-reference-controls .btn{padding:7px 11px;font-size:12px}
+.station-reference-list{display:flex;gap:6px;flex-wrap:wrap;max-height:82px;overflow-y:auto;margin-top:9px}
+.station-reference-chip{display:flex;align-items:center;gap:7px;background:#18384d;border:1px solid #2e536d;padding:4px 8px;border-radius:5px;color:#b8dbeb;font-size:11px}
+.station-reference-chip button{cursor:pointer;background:transparent;border:0;color:#ffa2a2;font-size:17px;padding:0 2px;line-height:1}
+.station-error{font-size:11px;color:#ff9d9d;overflow-wrap:anywhere;margin:8px 0 0}
+.monitor-station-indicator{margin-left:auto;font-size:12px;color:#80d4ff;padding:4px 8px;border-radius:5px;background:#15364b}
