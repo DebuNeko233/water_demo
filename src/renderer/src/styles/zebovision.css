@@ -74,6 +74,10 @@
 .station-mode-tabs,.station-tabs{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
 .station-mode-tabs{margin:0 2px 12px}
 .station-tabs{margin-bottom:10px}
+.station-nozzle-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 10px}
+.station-nozzle-tabs button{min-width:110px;min-height:36px;border:1px solid #34566e;background:#10293d;color:#adc8d8;border-radius:6px;padding:7px 12px;font-size:12px}
+.station-nozzle-tabs button.active{background:#205676;border-color:#45a6db;color:#fff}
+.station-nozzle-tabs button:hover{border-color:#45a6db}
 .station-mode-tabs button,.station-tabs button{border:1px solid #34566e;color:#adc8d8;background:#0b2234;border-radius:6px;padding:8px 13px;font-size:12px;cursor:pointer}
 .station-mode-tabs button.active,.station-tabs button.active{background:#174968;color:#effaff;border-color:#3292cb}
 .station-tabs button small{color:#82bfdc;margin-left:6px;font-size:11px}
