@@ -10,6 +10,7 @@ import json
 import math
 import os
 import threading
+from typing import Literal
 from pathlib import Path
 from uuid import uuid4
 
@@ -21,7 +22,7 @@ from .water_session import CalibrationInput, InvalidFrame
 from sample_backend.core.config import data_directory
 
 STAGES = ("P1", "P2", "P3")
-MIN_REFS = 5
+MIN_REFS = 3
 MAX_REFS = 12
 
 
@@ -34,6 +35,8 @@ class StageReferenceInput(BaseModel):
     stage: str
     file_path: str = Field(min_length=1, max_length=4096)
     time_s: float = Field(ge=0, le=86400, allow_inf_nan=False)
+    # P3 can have two physical nozzles with distinct reference appearances.
+    group: Literal['default', 'nozzle_a', 'nozzle_b'] = 'default'
 
 
 class StageRemoveReferenceInput(BaseModel):
@@ -55,38 +58,37 @@ def edge_descriptor(frame: np.ndarray) -> np.ndarray:
 
 
 class ReferencePositionRecognizer:
-    """Match only stable edge features, abstain instead of guessing on ambiguity."""
+    """Select P1/P2/P3; distinct nozzle appearances share the same P3 ROI."""
 
-    def __init__(self, samples: dict[str, list[np.ndarray]],
+    def __init__(self, samples: dict[str, dict[str, list[np.ndarray]]],
                  threshold: float = .78, margin: float = .035,
                  spatial_mask: np.ndarray | None = None):
         self.threshold = threshold
         self.margin = margin
-        self.references: dict[str, list[np.ndarray]] = {}
-        self.masks: dict[str, np.ndarray] = {}
+        self.references: dict[str, dict[str, list[np.ndarray]]] = {}
+        self.masks: dict[str, dict[str, np.ndarray]] = {}
         for stage in STAGES:
-            frames = samples.get(stage, [])
-            if len(frames) < MIN_REFS:
-                continue
-            descriptors = np.stack([edge_descriptor(f) for f in frames])
-            self.references[stage] = [x for x in descriptors]
-            # Moving nozzle/water creates edges that vary from reference to
-            # reference; downweight them. Preserve bright wafer-rim features.
-            median = np.median(descriptors, axis=0)
-            spread = np.median(np.abs(descriptors - median), axis=0)
-            stable = np.clip(1.0 - spread / (median + 10.0), 0.15, 1.0)
-            if spatial_mask is not None:
-                # Fixed chamber background can be nearly identical at all
-                # stations; focus recognition on the union of the three
-                # marked wafer regions. Keep a small context contribution.
-                if spatial_mask.shape != stable.shape:
-                    raise ValueError('Invalid station spatial mask shape')
-                stable *= (0.10 + 0.90 * spatial_mask)
-            self.masks[stage] = stable.astype(np.float32)
+            self.references[stage] = {}
+            self.masks[stage] = {}
+            for group, frames in samples.get(stage, {}).items():
+                if len(frames) < MIN_REFS:
+                    continue
+                descriptors = np.stack([edge_descriptor(f) for f in frames])
+                self.references[stage][group] = list(descriptors)
+                # Build a stability mask WITHIN one nozzle appearance. Mixing
+                # unlike nozzles here would dilute the wafer signature.
+                median = np.median(descriptors, axis=0)
+                spread = np.median(np.abs(descriptors - median), axis=0)
+                stable = np.clip(1.0 - spread / (median + 10.0), 0.15, 1.0)
+                if spatial_mask is not None:
+                    if spatial_mask.shape != stable.shape:
+                        raise ValueError('Invalid station spatial mask shape')
+                    stable *= (0.10 + 0.90 * spatial_mask)
+                self.masks[stage][group] = stable.astype(np.float32)
 
     @property
     def ready(self) -> bool:
-        return all(len(self.references.get(s, [])) >= MIN_REFS for s in STAGES)
+        return all(bool(self.references.get(s)) for s in STAGES)
 
     @staticmethod
     def _corr(current: np.ndarray, ref: np.ndarray, weights: np.ndarray) -> float:
@@ -107,16 +109,20 @@ class ReferencePositionRecognizer:
         descriptor = edge_descriptor(frame)
         scores = {}
         for stage in STAGES:
-            # Robust against an atypical nozzle position in one reference.
-            values = [self._corr(descriptor, ref, self.masks[stage])
-                      for ref in self.references[stage]]
-            scores[stage] = float(np.median(values))
+            # A stage may look different with nozzle A vs nozzle B. Keep
+            # robust median voting inside each group, then take the best
+            # complete group rather than averaging incompatible appearances.
+            group_scores = []
+            for group, references in self.references[stage].items():
+                values = [self._corr(descriptor, ref, self.masks[stage][group])
+                          for ref in references]
+                group_scores.append(float(np.median(values)))
+            scores[stage] = max(group_scores) if group_scores else -1.0
         ordered = sorted(scores.items(), key=lambda p: p[1], reverse=True)
         best, second = ordered[:2]
         if best[1] < self.threshold or best[1] - second[1] < self.margin:
             return "UNKNOWN", best[1], scores
         return best[0], best[1], scores
-
 
 class StageProfileStore:
     """One local equipment profile, explicitly saved by calibration UI."""
@@ -139,6 +145,10 @@ class StageProfileStore:
             for ref in obj['stages'][s]['references']:
                 if not ref['id'].isalnum():
                     raise ValueError('Invalid stage reference ID')
+                # Old P3 snapshots belong to nozzle A; no destructive reset.
+                group = ref.setdefault('group', 'nozzle_a' if s == 'P3' else 'default')
+                if group not in (('nozzle_a', 'nozzle_b') if s == 'P3' else ('default',)):
+                    raise ValueError('Invalid stage reference group')
         return obj
 
     def _save(self) -> None:
@@ -154,7 +164,9 @@ class StageProfileStore:
             snapshot = json.loads(json.dumps(self._profile))
             snapshot['ready'] = all(
                 snapshot['stages'][s]['calibration'] is not None and
-                len(snapshot['stages'][s]['references']) >= MIN_REFS
+                any(sum(ref.get('group', 'nozzle_a' if s == 'P3' else 'default') == group
+                        for ref in snapshot['stages'][s]['references']) >= MIN_REFS
+                    for group in (('nozzle_a', 'nozzle_b') if s == 'P3' else ('default',)))
                 for s in STAGES)
             snapshot['minimum_references'] = MIN_REFS
             return snapshot
@@ -197,6 +209,11 @@ class StageProfileStore:
 
     def capture(self, req: StageReferenceInput) -> dict:
         stage = self._stage(req.stage)
+        group = req.group
+        if stage == 'P3' and group == 'default':
+            group = 'nozzle_a'
+        if group not in (('nozzle_a', 'nozzle_b') if stage == 'P3' else ('default',)):
+            raise InvalidFrame('只有 P3 可以选择喷头 A/B')
         with self._lock:
             entry = self._profile['stages'][stage]
             if entry['calibration'] is None:
@@ -232,7 +249,8 @@ class StageProfileStore:
                 ident = uuid4().hex
                 filename = self.root / (ident + '.png')
                 filename.write_bytes(encoded.tobytes())
-                ref = {'id': ident, 'time_s': req.time_s, 'source': path.name}
+                ref = {'id': ident, 'time_s': req.time_s, 'source': path.name,
+                       'group': group}
                 entry['references'].append(ref)
                 try:
                     self._save()
@@ -264,13 +282,13 @@ class StageProfileStore:
         with self._lock:
             snap = self.snapshot()
             if not snap['ready']:
-                raise InvalidFrame('三个工位均须标注 ROI 且每个至少提供 5 张参考帧')
-            samples: dict[str, list[np.ndarray]] = {}
+                raise InvalidFrame('三个工位均须标注 ROI 且每个至少提供 3 张同组参考帧')
+            samples: dict[str, dict[str, list[np.ndarray]]] = {}
             for stage in STAGES:
                 cal = snap['stages'][stage]['calibration']
                 if (cal['width'], cal['height']) != (width, height):
                     raise InvalidFrame('标定分辨率与当前视频不一致，请重新标定')
-                samples[stage] = []
+                samples[stage] = {}
                 for ref in snap['stages'][stage]['references']:
                     # imdecode accepts Windows userData paths containing
                     # non-ASCII account names (cv2.imread may not).
@@ -282,7 +300,8 @@ class StageProfileStore:
                         frame = None
                     if frame is None or frame.shape[:2] != (height, width):
                         raise InvalidFrame('参考截图丢失或分辨率错误，请重新采集')
-                    samples[stage].append(frame)
+                    group = ref.get('group', 'nozzle_a' if stage == 'P3' else 'default')
+                    samples[stage].setdefault(group, []).append(frame)
             # The wafer may appear at any of three positions; compare its
             # edge structure across those areas, not the static chamber walls.
             yy, xx = np.ogrid[:96, :128]
