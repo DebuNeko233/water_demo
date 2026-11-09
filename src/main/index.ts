@@ -93,6 +93,25 @@ function registerIpc(): void {
     const selection = await dialog.showOpenDialog(mainWindow!, { properties: ['openFile'] })
     return selection.canceled ? null : selection.filePaths[0]
   })
+  ipcMain.handle('system:choose-profile-archive', async (event) => {
+    checkSender(event)
+    const choice = await dialog.showOpenDialog(mainWindow!, {
+      title: '导入设备配置',
+      filters: [{ name: '设备配置 ZIP', extensions: ['zip'] }],
+      properties: ['openFile'],
+    })
+    return choice.canceled ? null : choice.filePaths[0]
+  })
+  ipcMain.handle('system:save-profile-archive', async (event) => {
+    checkSender(event)
+    const date = new Date().toISOString().slice(0, 10)
+    const choice = await dialog.showSaveDialog(mainWindow!, {
+      title: '导出设备配置',
+      defaultPath: 'ZeboVision-device-profile-' + date + '.zip',
+      filters: [{ name: '设备配置 ZIP', extensions: ['zip'] }],
+    })
+    return choice.canceled ? null : choice.filePath
+  })
   // 日志内容也来自 Renderer，必须校验级别、模块名、长度和控制字符。
   ipcMain.handle('logging:write', (event, level: unknown, source: unknown, message: unknown) => {
     checkSender(event)
