@@ -6,6 +6,7 @@ export const DEFAULT_ALGORITHM_SETTINGS = Object.freeze({
   history_seconds: 0.50,
   persistence_threshold: 0.50,
   s_water_threshold: 0.025,
+  station_match_threshold: 0.78,
   ng_hold_seconds: 0.50,
   recover_hold_seconds: 0.60,
   sector_count: 24,
@@ -27,6 +28,10 @@ export const ALGORITHM_GROUPS = [
       { key: 'blur_ksize', label: '高斯模糊核大小', unit: 'px', min: 0, max: 15, step: 1 },
       { key: 'history_seconds', label: '驻留统计窗口', unit: 's', min: 0.125, max: 3, step: 0.125 },
       { key: 'persistence_threshold', label: '像素驻留比例', unit: '', min: 0, max: 1, step: 0.05 },
+    ] },
+  { title: '工位识别', hint: '',
+    fields: [
+      { key: 'station_match_threshold', label: '工位判定阈值', unit: '', min: 0.50, max: 0.99, step: 0.01 },
     ] },
   { title: 'OK / NG 判定', hint: '连续异常与恢复使用不同时间门槛',
     fields: [
