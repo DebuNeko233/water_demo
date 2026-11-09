@@ -130,7 +130,8 @@ def _validate_archive(source: Path) -> tuple[dict, DetectorSettings, dict[str, b
                 images[ident] = raw
             return profile, settings, images
     except (zipfile.BadZipFile, zipfile.LargeZipFile, json.JSONDecodeError,
-            UnicodeDecodeError, KeyError, ValidationError, OSError, EOFError) as exc:
+            UnicodeDecodeError, KeyError, ValidationError, OSError, EOFError,
+            RuntimeError, NotImplementedError, cv2.error) as exc:
         raise InvalidFrame("ZIP 配置文件已损坏或内容不合法") from exc
 
 
