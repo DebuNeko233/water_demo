@@ -257,7 +257,14 @@ class StageProfileStore:
                     raise InvalidFrame('标定分辨率与当前视频不一致，请重新标定')
                 samples[stage] = []
                 for ref in snap['stages'][stage]['references']:
-                    frame = cv2.imread(str(self.root / (ref['id'] + '.png')))
+                    # imdecode accepts Windows userData paths containing
+                    # non-ASCII account names (cv2.imread may not).
+                    reference_file = self.root / (ref['id'] + '.png')
+                    try:
+                        raw = np.frombuffer(reference_file.read_bytes(), dtype=np.uint8)
+                        frame = cv2.imdecode(raw, cv2.IMREAD_COLOR)
+                    except OSError:
+                        frame = None
                     if frame is None or frame.shape[:2] != (height, width):
                         raise InvalidFrame('参考截图丢失或分辨率错误，请重新采集')
                     samples[stage].append(frame)
