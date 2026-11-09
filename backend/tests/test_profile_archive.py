@@ -126,6 +126,26 @@ def test_invalid_archive_does_not_overwrite_previous_profile(monkeypatch, tmp_pa
         assert client.get("/api/stations/profile").json()["ready"]
         assert client.get("/api/users/status").json()["settings"] == DetectorSettings().model_dump()
 
+        # The entry names and PNG dimensions can be correct even when pixel
+        # data is corrupted; a failed OpenCV decode must reject the whole ZIP.
+        good = tmp_path / "valid.zip"
+        assert client.post("/api/stations/archive/export", json={
+            "file_path": str(good), "admin_token": token,
+        }).status_code == 200
+        bad_png = tmp_path / "bad-pixels.zip"
+        with zipfile.ZipFile(good) as source, zipfile.ZipFile(bad_png, "w") as destination:
+            for name in source.namelist():
+                raw = source.read(name)
+                if name.endswith(".png"):
+                    raw = raw[:24] + b"broken-pixel-data"
+                destination.writestr(name, raw)
+        failed = client.post("/api/stations/archive/import", json={
+            "file_path": str(bad_png), "admin_token": token,
+        })
+        assert failed.status_code == 422, failed.text
+        assert (root / "profile.json").read_bytes() == profile_bytes
+        assert sorted(p.name for p in root.glob("*.png")) == images
+
 
 def test_settings_save_failure_restores_original_calibration(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_DATA_DIR", str(tmp_path / "data"))
