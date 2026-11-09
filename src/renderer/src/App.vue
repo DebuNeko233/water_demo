@@ -343,11 +343,11 @@ async function exportDeviceProfile(): Promise<void> {
 
 async function importDeviceProfile(): Promise<void> {
   if (currentRole.value !== 'admin' || !adminToken.value || archiveBusy.value) return
-  const path = await window.desktop.system.chooseProfileArchive()
-  if (!path || !window.confirm('导入将替换本机三个工位的 ROI、参考帧和检测参数，并停止当前检测。确定继续吗？')) return
   archiveBusy.value = true
   stationError.value = ''
   try {
+    const path = await window.desktop.system.chooseProfileArchive()
+    if (!path || !window.confirm('导入将替换本机三个工位的 ROI、参考帧和检测参数，并停止当前检测。确定继续吗？')) return
     const imported = await importStationArchive(path, adminToken.value)
     detection.invalidate()
     previouslyPlaying = false
