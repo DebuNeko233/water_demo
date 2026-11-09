@@ -7,7 +7,7 @@ import { usePythonVideoStream } from './composables/usePythonVideoStream'
 import {
   STAGES, getStationProfile, saveStationCalibration,
   captureStationReference, removeStationReference,
-  type StageKey, type StageMode, type StationProfile,
+  type StageKey, type StageMode, type StationProfile, type ReferenceGroup,
 } from './services/station-profile'
 import AlgorithmSettingsModal from './components/AlgorithmSettingsModal.vue'
 import AdminAccessDialog from './components/AdminAccessDialog.vue'
@@ -82,6 +82,7 @@ const activeName = ref('')
 const calibration = ref<Calibration | null>(null)
 const stationMode = ref<StageMode>('single')
 const selectedStation = ref<StageKey>('P1')
+const selectedP3Nozzle = ref<'nozzle_a' | 'nozzle_b'>('nozzle_a')
 const stationProfile = ref<StationProfile | null>(null)
 const stationBusy = ref(false)
 const stationError = ref('')
@@ -131,7 +132,13 @@ const readyToConfirm = computed(() =>
     : !!draftCalibration.value,
 )
 const selectedStageConfig = computed(() => stationProfile.value?.stages[selectedStation.value])
-const currentStageReferences = computed(() => selectedStageConfig.value?.references ?? [])
+const currentStageReferences = computed(() => (selectedStageConfig.value?.references ?? []).filter(refItem =>
+  selectedStation.value !== 'P3' || (refItem.group ?? 'nozzle_a') === selectedP3Nozzle.value,
+))
+const p3NozzleACount = computed(() => stationProfile.value?.stages.P3.references.filter(item =>
+  (item.group ?? 'nozzle_a') === 'nozzle_a').length ?? 0)
+const p3NozzleBCount = computed(() => stationProfile.value?.stages.P3.references.filter(item =>
+  item.group === 'nozzle_b').length ?? 0)
 const currentStageMin = computed(() => stationProfile.value?.minimum_references ?? 5)
 const shownTime = computed(() => seekDraft.value ?? currentTime.value)
 const progress = computed(() => duration.value > 0 ? shownTime.value / duration.value * 100 : 0)
@@ -331,7 +338,8 @@ async function captureCurrentReference(): Promise<void> {
     stationProfile.value = await saveStationCalibration(
       selectedStation.value, draftCalibration.value)
     const time = calibrationVideo.value?.currentTime ?? calibrationTime.value
-    stationProfile.value = await captureStationReference(selectedStation.value, file, time)
+    const group: ReferenceGroup = selectedStation.value === 'P3' ? selectedP3Nozzle.value : 'default'
+    stationProfile.value = await captureStationReference(selectedStation.value, file, time, group)
     notify(selectedStation.value + ' 参考帧已采集')
   } catch (error) {
     stationError.value = String(error)
@@ -804,11 +812,15 @@ onBeforeUnmount(() => {
                 {{ stage }} <small>{{ stationProfile?.stages[stage].references.length ?? 0 }}/{{ currentStageMin }}</small>
               </button>
             </div>
+            <div v-if="selectedStation === 'P3'" class="station-nozzle-tabs" role="group" aria-label="P3 喷头参考帧组">
+              <button type="button" :class="{ active: selectedP3Nozzle === 'nozzle_a' }" @click="selectedP3Nozzle = 'nozzle_a'">喷头 A · {{ p3NozzleACount }} 张</button>
+              <button type="button" :class="{ active: selectedP3Nozzle === 'nozzle_b' }" @click="selectedP3Nozzle = 'nozzle_b'">喷头 B · {{ p3NozzleBCount }} 张</button>
+            </div>
             <div class="station-reference-controls">
-              <button type="button" class="btn btn-primary" :disabled="!draftCalibration || stationBusy || currentStageReferences.length >= 12" @click="captureCurrentReference">
+              <button type="button" class="btn btn-primary" :disabled="!draftCalibration || stationBusy || (selectedStageConfig?.references.length ?? 0) >= 12" @click="captureCurrentReference">
                 {{ stationBusy ? '采集中…' : '保存 ROI 并采集当前帧' }}
               </button>
-              <span>三个工位各需至少 {{ currentStageMin }} 张不同画面的参考帧</span>
+              <span>{{ selectedStation === 'P3' ? '同一 P3 ROI，每种喷头分别采集至少 ' + currentStageMin + ' 张参考帧' : '每个工位至少 ' + currentStageMin + ' 张不同画面的参考帧' }}</span>
             </div>
             <div v-if="currentStageReferences.length" class="station-reference-list">
               <span v-for="refItem in currentStageReferences" :key="refItem.id" class="station-reference-chip">
