@@ -162,12 +162,24 @@ class StageProfileStore:
     def snapshot(self) -> dict:
         with self._lock:
             snapshot = json.loads(json.dumps(self._profile))
-            snapshot['ready'] = all(
-                snapshot['stages'][s]['calibration'] is not None and
-                any(sum(ref.get('group', 'nozzle_a' if s == 'P3' else 'default') == group
-                        for ref in snapshot['stages'][s]['references']) >= MIN_REFS
-                    for group in (('nozzle_a', 'nozzle_b') if s == 'P3' else ('default',)))
-                for s in STAGES)
+            stage_ready = []
+            for stage in STAGES:
+                refs = snapshot['stages'][stage]['references']
+                groups = ('nozzle_a', 'nozzle_b') if stage == 'P3' else ('default',)
+                counts = [
+                    sum(ref.get('group', 'nozzle_a' if stage == 'P3' else 'default') == group
+                        for ref in refs)
+                    for group in groups
+                ]
+                # A new optional nozzle group remains disabled until it has
+                # its three samples; prevent a partially configured B bank
+                # from being mistaken for a working automatic P3 detector.
+                stage_ready.append(
+                    snapshot['stages'][stage]['calibration'] is not None
+                    and any(count >= MIN_REFS for count in counts)
+                    and all(count == 0 or count >= MIN_REFS for count in counts)
+                )
+            snapshot['ready'] = all(stage_ready)
             snapshot['minimum_references'] = MIN_REFS
             return snapshot
 
