@@ -161,6 +161,8 @@ def test_default_parameters_match_original_main1_chn_demo_config():
     from sample_backend.services.water_session import DetectorSettings
 
     defaults = DetectorSettings().model_dump()
+    assert defaults.pop("station_match_threshold") == 0.78
+    # Keep the canonical water detector's 11 original parameters untouched.
     original = DemoConfig()
     assert defaults == {key: getattr(original, key) for key in defaults}
     assert defaults == {
