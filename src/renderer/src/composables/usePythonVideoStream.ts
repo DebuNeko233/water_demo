@@ -179,14 +179,17 @@ export function usePythonVideoStream() {
     if (!records.value.length) return
     // Original main1_chn.py CSV headings and precision for side-by-side comparison.
     const columns = ['frame', 'time_s', 'status', 's_water', 'abnormal_run_s',
-      'max_sector_index', 'max_sector_start_deg', 'max_sector_end_deg', 'max_sector_score']
+      'max_sector_index', 'max_sector_start_deg', 'max_sector_end_deg', 'max_sector_score',
+      'stage', 'position_confidence', 'position_reason']
     const csv = [columns.join(','), ...records.value.map(x => {
       const idx = x.max_sector_idx
       const start = idx >= 0 ? 360 * idx / x.sector_count : ''
       const end = idx >= 0 ? 360 * (idx + 1) / x.sector_count : ''
       return [x.frame_index ?? '', x.time_s.toFixed(6), x.status, x.s_water.toFixed(6),
         x.abnormal_run_s.toFixed(6), idx, start, end,
-        x.max_sector_score.toFixed(6)].join(',')
+        x.max_sector_score.toFixed(6), x.stage ?? 'P1',
+        (x.position_confidence ?? 1).toFixed(4),
+        x.reason ?? ''].join(',')
     })].join('\r\n')
     const href = URL.createObjectURL(new Blob(['\ufeff', csv], {type:'text/csv;charset=utf-8'}))
     const a = document.createElement('a')
