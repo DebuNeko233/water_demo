@@ -22,6 +22,9 @@ test('invalid crossed ROI ratios, blur kernels and excessive history are rejecte
     ['history_seconds', 10],
     ['sector_count', 1],
     ['s_water_threshold', Number.NaN],
+    ['station_match_threshold', 0.49],
+    ['station_match_threshold', 1.0],
+    ['station_match_threshold', Number.NaN],
   ]) {
     assert.ok(validateAlgorithmSettings({...base, [key]: value}))
   }
@@ -44,7 +47,7 @@ test('settings round-trip without sharing mutable proxy objects', () => {
 })
 
 
-test('all 11 default values match the active DemoConfig in uploaded main1_chn.py', () => {
+test('original water detector defaults and separate station threshold remain aligned', () => {
   assert.deepEqual({...DEFAULT_ALGORITHM_SETTINGS}, {
     inner_radius_ratio: 0.65,
     outer_radius_ratio: 0.95,
@@ -52,6 +55,7 @@ test('all 11 default values match the active DemoConfig in uploaded main1_chn.py
     history_seconds: 0.50,
     persistence_threshold: 0.50,
     s_water_threshold: 0.025,
+    station_match_threshold: 0.78,
     ng_hold_seconds: 0.50,
     recover_hold_seconds: 0.60,
     sector_count: 24,
@@ -60,4 +64,14 @@ test('all 11 default values match the active DemoConfig in uploaded main1_chn.py
   })
   assert.deepEqual(readAlgorithmSettings({ getItem: () => null }),
     {...DEFAULT_ALGORITHM_SETTINGS})
+})
+
+test('station recognition threshold is separate from water NG settings', () => {
+  const station = ALGORITHM_GROUPS.find(group => group.title === '工位识别')
+  assert.ok(station)
+  assert.equal(station.fields.length, 1)
+  assert.deepEqual(station.fields.map(field => field.key), ['station_match_threshold'])
+  const settings = {...DEFAULT_ALGORITHM_SETTINGS, station_match_threshold: 0.65}
+  assert.equal(validateAlgorithmSettings(settings), null)
+  assert.equal(settings.s_water_threshold, DEFAULT_ALGORITHM_SETTINGS.s_water_threshold)
 })
