@@ -36,6 +36,8 @@ class DetectorSettings(BaseModel):
     history_seconds: float = Field(DemoConfig.history_seconds, ge=0.125, le=3.0, allow_inf_nan=False)
     persistence_threshold: float = Field(DemoConfig.persistence_threshold, ge=0.0, le=1.0, allow_inf_nan=False)
     s_water_threshold: float = Field(DemoConfig.s_water_threshold, ge=0.0, le=1.0, allow_inf_nan=False)
+    # Reference-frame station position classification, NOT water OK/NG.
+    station_match_threshold: float = Field(0.78, ge=0.50, le=0.99, allow_inf_nan=False)
     ng_hold_seconds: float = Field(DemoConfig.ng_hold_seconds, ge=0.0, le=30.0, allow_inf_nan=False)
     recover_hold_seconds: float = Field(DemoConfig.recover_hold_seconds, ge=0.0, le=30.0, allow_inf_nan=False)
     sector_count: int = Field(DemoConfig.sector_count, ge=4, le=72)
@@ -98,7 +100,8 @@ class WaterDetectionSession:
         if cal.width * cal.height > 4_194_304:
             raise ValueError('Video exceeds the real-time detection size limit (4.2 megapixels)')
         with self._lock:
-            self._config = DemoConfig(**(config.detector or DetectorSettings()).model_dump())
+            self._config = DemoConfig(**(config.detector or DetectorSettings()).model_dump(
+                exclude={'station_match_threshold'}))
             detector = WaterDetector(
                 (cal.height, cal.width), config.sample_fps,
                 Calibration(cal.cx, cal.cy, cal.radius), self._config,
