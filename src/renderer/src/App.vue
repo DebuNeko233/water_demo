@@ -115,11 +115,19 @@ const draftCalibration = computed<Calibration | null>(() =>
 )
 const readyToConfirm = computed(() =>
   stationMode.value === 'auto'
-    ? !!stationProfile.value?.ready && !stationBusy.value &&
+    ? !!stationProfile.value?.ready && !stationBusy.value && !!draftCalibration.value &&
       STAGES.every(s => {
         const saved = stationProfile.value?.stages[s].calibration
         return saved?.width === draftWidth.value && saved?.height === draftHeight.value
-      })
+      }) &&
+      (() => {
+        const saved = stationProfile.value?.stages[selectedStation.value].calibration
+        const draft = draftCalibration.value
+        return !!saved && !!draft &&
+          Math.abs(saved.cx - draft.cx) < 0.01 &&
+          Math.abs(saved.cy - draft.cy) < 0.01 &&
+          Math.abs(saved.radius - draft.radius) < 0.01
+      })()
     : !!draftCalibration.value,
 )
 const selectedStageConfig = computed(() => stationProfile.value?.stages[selectedStation.value])
