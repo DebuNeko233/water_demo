@@ -49,7 +49,8 @@ def test_backup_contains_roi_png_nozzle_groups_and_approved_settings(monkeypatch
     with TestClient(create_app()) as client:
         profile = configured_client(client, tmp_path)
         token = admin_token(client)
-        changed = DetectorSettings(s_water_threshold=0.23, sector_count=18)
+        changed = DetectorSettings(s_water_threshold=0.23, sector_count=18,
+                                   station_match_threshold=0.67)
         assert client.post("/api/users/settings", json={
             "admin_token": token, "settings": changed.model_dump(),
         }).status_code == 200
@@ -73,6 +74,7 @@ def test_backup_contains_roi_png_nozzle_groups_and_approved_settings(monkeypatch
             exported = json.loads(bundle.read("stations/profile.json"))
             assert exported["stages"]["P3"]["references"][0]["group"] == "nozzle_a"
             assert json.loads(bundle.read("detector/settings.json"))["sector_count"] == 18
+            assert json.loads(bundle.read("detector/settings.json"))["station_match_threshold"] == 0.67
 
         first_ref = profile["stages"]["P1"]["references"][0]
         client.post("/api/stations/reference/remove", json={
@@ -94,6 +96,7 @@ def test_backup_contains_roi_png_nozzle_groups_and_approved_settings(monkeypatch
         assert restored.json()["profile"]["ready"] is True
         assert restored.json()["reference_count"] == 9
         assert restored.json()["settings"]["sector_count"] == 18
+        assert restored.json()["settings"]["station_match_threshold"] == 0.67
         assert client.get("/api/users/status").json()["settings"]["sector_count"] == 18
         snap, model = client.app.state.station_profile.build(96, 96)
         assert model.ready
