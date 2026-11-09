@@ -26,6 +26,8 @@ const desktop: DesktopBridge = {
   },
   system: {
     selectFile: () => ipcRenderer.invoke('system:select-file'),
+    chooseProfileArchive: () => ipcRenderer.invoke('system:choose-profile-archive'),
+    saveProfileArchive: () => ipcRenderer.invoke('system:save-profile-archive'),
     getPathForFile: (file) => webUtils.getPathForFile(file),
     openLogs: (target) => ipcRenderer.invoke('system:open-logs', target),
     minimize: () => ipcRenderer.invoke('system:minimize'),
