@@ -7,6 +7,7 @@ import { usePythonVideoStream } from './composables/usePythonVideoStream'
 import {
   STAGES, getStationProfile, saveStationCalibration,
   captureStationReference, removeStationReference,
+  exportStationArchive, importStationArchive,
   type StageKey, type StageMode, type StationProfile, type ReferenceGroup,
 } from './services/station-profile'
 import AlgorithmSettingsModal from './components/AlgorithmSettingsModal.vue'
@@ -85,6 +86,7 @@ const selectedStation = ref<StageKey>('P1')
 const selectedP3Nozzle = ref<'nozzle_a' | 'nozzle_b'>('nozzle_a')
 const stationProfile = ref<StationProfile | null>(null)
 const stationBusy = ref(false)
+const archiveBusy = ref(false)
 const stationError = ref('')
 let stationProfileInitialized = false
 const center = ref<Point | null>(null)
@@ -322,6 +324,47 @@ function chooseStationMode(mode: StageMode): void {
     }
   }
 }
+async function exportDeviceProfile(): Promise<void> {
+  if (currentRole.value !== 'admin' || !adminToken.value || archiveBusy.value) return
+  archiveBusy.value = true
+  stationError.value = ''
+  try {
+    const path = await window.desktop.system.saveProfileArchive()
+    if (!path) return
+    const saved = await exportStationArchive(path, adminToken.value)
+    notify('设备配置已导出（' + saved.reference_count + ' 张参考帧）')
+  } catch (error) {
+    stationError.value = '导出失败：' + String(error)
+    if (String(error).includes('ADMIN_REQUIRED')) resetToOperator()
+  } finally {
+    archiveBusy.value = false
+  }
+}
+
+async function importDeviceProfile(): Promise<void> {
+  if (currentRole.value !== 'admin' || !adminToken.value || archiveBusy.value) return
+  const path = await window.desktop.system.chooseProfileArchive()
+  if (!path || !window.confirm('导入将替换本机三个工位的 ROI、参考帧和检测参数，并停止当前检测。确定继续吗？')) return
+  archiveBusy.value = true
+  stationError.value = ''
+  try {
+    const imported = await importStationArchive(path, adminToken.value)
+    detection.invalidate()
+    previouslyPlaying = false
+    stationProfile.value = imported.profile
+    algorithmSettings.value = copyAlgorithmSettings(imported.settings)
+    stationProfileInitialized = true
+    stationMode.value = 'auto'
+    selectStation('P1')
+    notify('设备配置已导入（' + imported.reference_count + ' 张参考帧），请确认后重新检测')
+  } catch (error) {
+    stationError.value = '导入失败，原配置已保留：' + String(error)
+    if (String(error).includes('ADMIN_REQUIRED')) resetToOperator()
+  } finally {
+    archiveBusy.value = false
+  }
+}
+
 async function captureCurrentReference(): Promise<void> {
   if (stationBusy.value || !draftCalibration.value) return
   const file = pendingVideoPath.value || activeVideoPath.value
@@ -806,6 +849,11 @@ onBeforeUnmount(() => {
             <button type="button" :class="{ active: stationMode === 'single' }" @click="chooseStationMode('single')">单工位</button>
             <button type="button" :class="{ active: stationMode === 'auto' }" @click="chooseStationMode('auto')">三工位自动</button>
           </div>
+          <div v-if="currentRole === 'admin'" class="station-archive-actions" role="group" aria-label="设备配置导入导出">
+            <button type="button" class="btn btn-muted" :disabled="archiveBusy || stationBusy" @click="exportDeviceProfile">导出设备配置 ZIP</button>
+            <button type="button" class="btn btn-muted" :disabled="archiveBusy || stationBusy" @click="importDeviceProfile">导入设备配置 ZIP</button>
+          </div>
+          <p v-if="stationMode !== 'auto' && stationError" class="station-error" role="alert">{{ stationError }}</p>
           <div v-if="stationMode === 'auto'" class="station-setup">
             <div class="station-tabs" role="group" aria-label="选择晶圆工位">
               <button v-for="stage in STAGES" :key="stage" type="button" :class="{ active: selectedStation === stage }" @click="selectStation(stage)">
