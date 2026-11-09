@@ -40,3 +40,15 @@ export function removeStationReference(stage: StageKey, referenceId: string): Pr
     stage, reference_id: referenceId,
   })
 }
+
+export function exportStationArchive(filePath: string, adminToken: string): Promise<{ saved: boolean; reference_count: number }> {
+  return window.desktop.backend.request('POST', '/api/stations/archive/export', {
+    file_path: filePath, admin_token: adminToken,
+  })
+}
+
+export function importStationArchive(filePath: string, adminToken: string): Promise<{ profile: StationProfile; settings: import('../utils/algorithm-settings.mjs').AlgorithmSettings; reference_count: number }> {
+  return window.desktop.backend.request('POST', '/api/stations/archive/import', {
+    file_path: filePath, admin_token: adminToken,
+  })
+}
