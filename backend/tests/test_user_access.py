@@ -27,6 +27,7 @@ def test_operator_is_default_and_cannot_submit_new_settings(client):
     assert status.json()['role'] == 'operator'
     assert status.json()['admin_configured'] is False
     assert status.json()['settings'] == DetectorSettings().model_dump()
+    assert status.json()['settings']['station_match_threshold'] == 0.78
     payload = {'calibration': calibration(), 'sample_fps': 8}
     assert client.post('/api/detection/start', json=payload).status_code == 200
     for attempt in (
@@ -62,7 +63,8 @@ def test_admin_password_switch_settings_and_logout(client, tmp_path):
     assert 'password_hash' in stored and 'salt' in stored
     assert client.post('/api/users/setup', json={'password': 'Other#9526'}).status_code == 409
     assert client.post('/api/users/login', json={'password': 'wrong-pass'}).status_code == 401
-    settings = DetectorSettings(s_water_threshold=0.11, sector_count=12)
+    settings = DetectorSettings(s_water_threshold=0.11, sector_count=12,
+                                station_match_threshold=0.70)
     result = client.post('/api/users/settings', json={
         'admin_token': token, 'settings': settings.model_dump(),
     })
@@ -73,6 +75,7 @@ def test_admin_password_switch_settings_and_logout(client, tmp_path):
     guest = client.get('/api/users/status').json()
     assert guest['role'] == 'operator'
     assert guest['settings']['s_water_threshold'] == .11
+    assert guest['settings']['station_match_threshold'] == .70
     started = client.post('/api/detection/start', json={
         'calibration': calibration(), 'sample_fps': 8,
     })
