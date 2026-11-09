@@ -15,8 +15,10 @@ from uuid import uuid4
 
 import cv2
 from pydantic import BaseModel, Field
+from typing import Literal
 
 from .frame_renderer import render_detection_frame
+from .station_position import STAGES, StageProfileStore, ReferencePositionRecognizer
 from .water_detection import Calibration, DemoConfig, WaterDetector
 from .water_session import CalibrationInput, DetectorSettings, InvalidFrame, SessionExpired
 
@@ -29,6 +31,7 @@ class VideoOpenInput(BaseModel):
     start_time_s: float = Field(default=0.0, ge=0.0, le=86400, allow_inf_nan=False)
     detector: DetectorSettings | None = None
     admin_token: str | None = Field(default=None, max_length=128)
+    stage_mode: Literal['single', 'auto'] = 'single'
 
 
 class VideoNextInput(BaseModel):
@@ -40,7 +43,8 @@ class VideoSeekInput(VideoNextInput):
 
 
 class PythonVideoStream:
-    def __init__(self) -> None:
+    def __init__(self, profile: StageProfileStore | None = None) -> None:
+        self._profile = profile
         self._lock = threading.RLock()
         self._cap: cv2.VideoCapture | None = None
         self._detector: WaterDetector | None = None
@@ -53,6 +57,12 @@ class PythonVideoStream:
         self._height = 0
         self._config = DemoConfig()
         self._history: deque[dict] = deque(maxlen=1500)
+        self._mode = 'single'
+        self._recognizer: ReferencePositionRecognizer | None = None
+        self._stage_calibrations: dict[str, dict] = {}
+        self._active_stage: str | None = None
+        self._candidate_stage: str | None = None
+        self._candidate_count = 0
 
     def _close(self) -> None:
         if self._cap is not None:
@@ -61,13 +71,18 @@ class PythonVideoStream:
         self._detector = None
         self._id = None
         self._history.clear()
+        self._recognizer = None
+        self._stage_calibrations = {}
+        self._active_stage = None
+        self._candidate_stage = None
+        self._candidate_count = 0
 
     def close(self) -> None:
         with self._lock:
             self._close()
 
     def _verify(self, sid: str) -> None:
-        if sid != self._id or self._cap is None or self._detector is None:
+        if sid != self._id or self._cap is None:
             raise SessionExpired('Python video session expired; reopen the file')
 
     def open(self, req: VideoOpenInput) -> dict:
@@ -94,6 +109,12 @@ class PythonVideoStream:
             # API route resolves the approved, persistent settings; direct
             # callers without an override use original DemoConfig defaults.
             cfg = DemoConfig(**(req.detector or DetectorSettings()).model_dump())
+            stage_profile = None
+            recognizer = None
+            if req.stage_mode == 'auto':
+                if self._profile is None:
+                    raise InvalidFrame('三工位参考帧配置尚未初始化')
+                stage_profile, recognizer = self._profile.build(width, height)
             detector = WaterDetector((height, width), fps,
                                      Calibration(cal.cx, cal.cy, cal.radius), cfg)
             with self._lock:
@@ -106,6 +127,9 @@ class PythonVideoStream:
                 self._frame_count = frame_count
                 self._duration = frame_count / fps if frame_count else 0.0
                 self._config = cfg
+                self._mode = req.stage_mode
+                self._recognizer = recognizer
+                self._stage_calibrations = (stage_profile['stages'] if stage_profile else {})
                 self._seek_capture(req.start_time_s)
                 packet = self._next_locked()
                 if packet['ended']:
@@ -127,10 +151,11 @@ class PythonVideoStream:
                 'sector_threshold': self._config.sector_threshold,
                 'sector_count': self._config.sector_count,
                 'inner_radius_ratio': self._config.inner_radius_ratio,
-                'outer_radius_ratio': self._config.outer_radius_ratio}
+                'outer_radius_ratio': self._config.outer_radius_ratio,
+                'stage_mode': self._mode}
 
     def _seek_capture(self, time_s: float) -> None:
-        assert self._cap is not None and self._detector is not None
+        assert self._cap is not None
         index = max(0, int(round(time_s * self._fps)))
         if self._frame_count:
             index = min(index, self._frame_count - 1)
@@ -139,9 +164,16 @@ class PythonVideoStream:
         self._next_index = index
         # User-requested seek is a new inspection segment; restart exactly
         # as when main1_chn.py constructs a fresh WaterDetector.
-        old = self._detector
-        self._detector = WaterDetector((self._height, self._width), self._fps,
-                                       old.calib, self._config)
+        self._candidate_stage = None
+        self._candidate_count = 0
+        self._active_stage = None
+        if self._mode == 'auto':
+            self._detector = None
+        else:
+            assert self._detector is not None
+            old = self._detector
+            self._detector = WaterDetector((self._height, self._width), self._fps,
+                                           old.calib, self._config)
         self._history.clear()
 
     def seek(self, req: VideoSeekInput) -> dict:
@@ -155,32 +187,89 @@ class PythonVideoStream:
             self._verify(req.session_id)
             return self._next_locked()
 
+    def _paused_result(self, stage: str, reason: str, confidence: float,
+                       scores: dict[str, float], time_s: float, index: int) -> dict:
+        """Unknown/unstable positions MUST NOT count as OK or NG."""
+        return {
+            'session_id': self._id, 'frame_index': index,
+            'status': 'PAUSED', 'reason': reason,
+            'stage': stage, 'position_confidence': confidence,
+            'position_scores': scores, 's_water': 0.0,
+            'history_ready': False,
+            's_water_threshold': self._config.s_water_threshold,
+            'sector_threshold': self._config.sector_threshold,
+            'sector_count': self._config.sector_count,
+            'inner_radius_ratio': self._config.inner_radius_ratio,
+            'outer_radius_ratio': self._config.outer_radius_ratio,
+            'max_sector_idx': -1, 'max_sector_score': 0.0,
+            'sector_scores': [0.0] * self._config.sector_count,
+            'abnormal_run_s': 0.0, 'time_s': time_s, 'history': [],
+        }
+
+    def _auto_select(self, frame: object) -> tuple[str, float, dict[str, float], str]:
+        assert self._recognizer is not None
+        candidate, confidence, scores = self._recognizer.classify(frame)
+        if candidate == 'UNKNOWN':
+            self._candidate_stage = None
+            self._candidate_count = 0
+            self._active_stage = None
+            self._detector = None
+            self._history.clear()
+            return candidate, confidence, scores, 'POSITION_UNKNOWN'
+        if candidate == self._active_stage and self._detector is not None:
+            return candidate, confidence, scores, ''
+        if candidate != self._candidate_stage:
+            self._candidate_stage = candidate
+            self._candidate_count = 1
+        else:
+            self._candidate_count += 1
+        # Reset immediately when leaving the last confirmed position.
+        self._active_stage = None
+        self._detector = None
+        self._history.clear()
+        if self._candidate_count < 3:
+            return candidate, confidence, scores, 'POSITION_UNSTABLE'
+        cal = self._stage_calibrations[candidate]['calibration']
+        self._detector = WaterDetector((self._height, self._width), self._fps,
+                                       Calibration(cal['cx'], cal['cy'], cal['radius']),
+                                       self._config)
+        self._active_stage = candidate
+        return candidate, confidence, scores, ''
+
     def _next_locked(self) -> dict:
-        assert self._cap is not None and self._detector is not None
+        assert self._cap is not None
         ok, frame = self._cap.read()
         if not ok:
             return {'ended': True}
         index = self._next_index
         self._next_index += 1
         t = index / self._fps
-        # CRITICAL: perform inference on ORIGINAL OpenCV decoded BGR frame.
-        # Never JPEG/PNG encode/decode before this call.
-        data = self._detector.process(frame)
-        annotated = render_detection_frame(frame, self._detector, data)
+        # The recognizer never edits the frame. The canonical WaterDetector
+        # still processes the original full-FPS decoded BGR image.
+        stage, confidence, scores, reason = ('P1', 1.0, {}, '')
+        if self._mode == 'auto':
+            stage, confidence, scores, reason = self._auto_select(frame)
+        if reason:
+            data = None
+            annotated = frame
+        else:
+            assert self._detector is not None
+            data = self._detector.process(frame)
+            annotated = render_detection_frame(frame, self._detector, data)
         ok_jpeg, encoded = cv2.imencode('.jpg', annotated,
                                         [cv2.IMWRITE_JPEG_QUALITY, 84])
         if not ok_jpeg:
             raise InvalidFrame('Cannot encode annotated preview')
-        self._history.append({'time_s': t, 's_water': float(data['s_water'])})
-        while self._history and self._history[0]['time_s'] < t - 5.0:
-            self._history.popleft()
-        return {
-            'ended': False, 'frame_index': index, 'time_s': t,
-            'jpeg_base64': base64.b64encode(encoded).decode('ascii'),
-            'result': {
+        if data is not None:
+            self._history.append({'time_s': t, 's_water': float(data['s_water'])})
+            while self._history and self._history[0]['time_s'] < t - 5.0:
+                self._history.popleft()
+        result = self._paused_result(stage, reason, confidence, scores, t, index) if reason else {
                 'session_id': self._id,
                 'frame_index': index,
-                'status': data['status'],
+                'status': data['status'], 'reason': '',
+                'stage': stage, 'position_confidence': confidence,
+                'position_scores': scores,
                 's_water': float(data['s_water']),
                 'history_ready': bool(data['history_ready']),
                 's_water_threshold': self._config.s_water_threshold,
@@ -193,5 +282,9 @@ class PythonVideoStream:
                 'sector_scores': [float(v) for v in data['sector_scores']],
                 'abnormal_run_s': float(data['abnormal_run_s']),
                 'time_s': t, 'history': list(self._history),
-            },
+            }
+        return {
+            'ended': False, 'frame_index': index, 'time_s': t,
+            'jpeg_base64': base64.b64encode(encoded).decode('ascii'),
+            'result': result,
         }

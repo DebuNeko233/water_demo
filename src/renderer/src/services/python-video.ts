@@ -1,6 +1,7 @@
 /** Python owns decoding and inference; UI receives one image/result pair per decoded frame. */
 import { toPlainCalibration } from './detection-payload.mjs'
 import type { DetectionResult, WaferCalibration } from './water-detection'
+import type { StageMode } from './station-profile'
 
 export interface AnnotatedFrame {
   ended: boolean
@@ -16,15 +17,18 @@ export interface VideoStreamSession {
   height: number
   duration_s: number
   frame_count: number
+  stage_mode: StageMode
   frame: AnnotatedFrame
 }
 export function openPythonVideo(
   filePath: string, calibration: WaferCalibration, timeS: number,
+  stageMode: StageMode = 'single',
 ): Promise<VideoStreamSession> {
   return window.desktop.backend.request<VideoStreamSession>('POST', '/api/video/open', {
     file_path: filePath,
     calibration: toPlainCalibration(calibration),
     start_time_s: timeS,
+    stage_mode: stageMode,
     // No client-specified detector configuration. Python resolves the
     // last administrator-approved settings for every operator session.
   })

@@ -4,6 +4,11 @@ import { containRect, viewportToVideo, sourceViewBox } from './utils/videoGeomet
 import { svgSourceToClient } from './utils/svgCoordinates.mjs'
 import { calibrationPointerToSource } from './utils/calibrationPointer.mjs'
 import { usePythonVideoStream } from './composables/usePythonVideoStream'
+import {
+  STAGES, getStationProfile, saveStationCalibration,
+  captureStationReference, removeStationReference,
+  type StageKey, type StageMode, type StationProfile,
+} from './services/station-profile'
 import AlgorithmSettingsModal from './components/AlgorithmSettingsModal.vue'
 import AdminAccessDialog from './components/AdminAccessDialog.vue'
 import {
@@ -75,6 +80,12 @@ const pendingUrl = ref('')
 const activeUrl = ref('')
 const activeName = ref('')
 const calibration = ref<Calibration | null>(null)
+const stationMode = ref<StageMode>('single')
+const selectedStation = ref<StageKey>('P1')
+const stationProfile = ref<StationProfile | null>(null)
+const stationBusy = ref(false)
+const stationError = ref('')
+let stationProfileInitialized = false
 const center = ref<Point | null>(null)
 const radius = ref<number | null>(null)
 const draftWidth = ref(0)
@@ -96,12 +107,32 @@ let seekWasPlaying = false
 const seekDraft = ref<number | null>(null)
 let toastTimeout: ReturnType<typeof setTimeout> | undefined
 
-const readyToConfirm = computed(() => !!center.value && radius.value !== null && radius.value >= 20 && draftWidth.value > 0 && draftHeight.value > 0)
 const draftCalibration = computed<Calibration | null>(() =>
-  readyToConfirm.value && center.value && radius.value !== null
+  center.value && radius.value !== null && radius.value >= 20 &&
+  draftWidth.value > 0 && draftHeight.value > 0
     ? { cx: center.value.x, cy: center.value.y, radius: radius.value, width: draftWidth.value, height: draftHeight.value }
     : null,
 )
+const readyToConfirm = computed(() =>
+  stationMode.value === 'auto'
+    ? !!stationProfile.value?.ready && !stationBusy.value && !!draftCalibration.value &&
+      STAGES.every(s => {
+        const saved = stationProfile.value?.stages[s].calibration
+        return saved?.width === draftWidth.value && saved?.height === draftHeight.value
+      }) &&
+      (() => {
+        const saved = stationProfile.value?.stages[selectedStation.value].calibration
+        const draft = draftCalibration.value
+        return !!saved && !!draft &&
+          Math.abs(saved.cx - draft.cx) < 0.01 &&
+          Math.abs(saved.cy - draft.cy) < 0.01 &&
+          Math.abs(saved.radius - draft.radius) < 0.01
+      })()
+    : !!draftCalibration.value,
+)
+const selectedStageConfig = computed(() => stationProfile.value?.stages[selectedStation.value])
+const currentStageReferences = computed(() => selectedStageConfig.value?.references ?? [])
+const currentStageMin = computed(() => stationProfile.value?.minimum_references ?? 5)
 const shownTime = computed(() => seekDraft.value ?? currentTime.value)
 const progress = computed(() => duration.value > 0 ? shownTime.value / duration.value * 100 : 0)
 const calibrationProgress = computed(() => calibrationDuration.value > 0 ? calibrationTime.value / calibrationDuration.value * 100 : 0)
@@ -125,6 +156,10 @@ const resultStatus = computed(() => {
   return detectorResult.value?.status ?? 'WARMUP'
 })
 const resultDescription = computed(() => {
+  if (resultStatus.value === 'PAUSED') {
+    return detectorResult.value?.reason === 'POSITION_UNSTABLE'
+      ? '正在确认晶圆工位' : '未识别到可靠的晶圆工位'
+  }
   if (detectorStatus.value === 'error') return detectorError.value
   if (detectorStatus.value === 'connecting') return '正在连接 Python 检测服务'
   if (detectorStatus.value === 'idle') return '播放视频后开始检测'
@@ -239,6 +274,83 @@ function resetDraft(): void {
   clickMarkers.value = []
   coordinateCheck.value = null
 }
+function selectStation(stage: StageKey): void {
+  selectedStation.value = stage
+  const saved = stationProfile.value?.stages[stage].calibration
+  resetDraft()
+  if (saved && (!draftWidth.value ||
+      (saved.width === draftWidth.value && saved.height === draftHeight.value))) {
+    center.value = { x: saved.cx, y: saved.cy }
+    radius.value = saved.radius
+  }
+  stationError.value = ''
+}
+async function refreshStationProfile(): Promise<void> {
+  try {
+    const profile = await getStationProfile()
+    stationProfile.value = profile
+    if (!stationProfileInitialized) {
+      stationProfileInitialized = true
+      const hasReferences = STAGES.some(s => profile.stages[s].references.length > 0)
+      if (!modalOpen.value || hasReferences) stationMode.value = hasReferences ? 'auto' : 'single'
+    }
+    if (modalOpen.value && stationMode.value === 'auto' &&
+        !center.value && radius.value === null) {
+      selectStation(selectedStation.value)
+    }
+  } catch (error) {
+    stationError.value = '无法读取工位配置：' + String(error)
+  }
+}
+function chooseStationMode(mode: StageMode): void {
+  stationMode.value = mode
+  if (mode === 'auto') {
+    selectStation(selectedStation.value)
+    void refreshStationProfile()
+  } else {
+    resetDraft()
+    if (calibration.value) {
+      center.value = { x: calibration.value.cx, y: calibration.value.cy }
+      radius.value = calibration.value.radius
+    }
+  }
+}
+async function captureCurrentReference(): Promise<void> {
+  if (stationBusy.value || !draftCalibration.value) return
+  const file = pendingVideoPath.value || activeVideoPath.value
+  if (!file) { stationError.value = '请先选择视频'; return }
+  if (calibrationVideo.value?.seeking) {
+    stationError.value = '请等待画面跳转结束，再采集参考帧'
+    return
+  }
+  stationBusy.value = true
+  stationError.value = ''
+  try {
+    // Save this position's ROI then capture a *lossless OpenCV frame* on
+    // Python side; browser preview images are never used for matching.
+    stationProfile.value = await saveStationCalibration(
+      selectedStation.value, draftCalibration.value)
+    const time = calibrationVideo.value?.currentTime ?? calibrationTime.value
+    stationProfile.value = await captureStationReference(selectedStation.value, file, time)
+    notify(selectedStation.value + ' 参考帧已采集')
+  } catch (error) {
+    stationError.value = String(error)
+  } finally {
+    stationBusy.value = false
+  }
+}
+async function deleteCurrentReference(id: string): Promise<void> {
+  if (stationBusy.value) return
+  stationBusy.value = true
+  stationError.value = ''
+  try {
+    stationProfile.value = await removeStationReference(selectedStation.value, id)
+  } catch (error) {
+    stationError.value = String(error)
+  } finally {
+    stationBusy.value = false
+  }
+}
 function openCalibration(existing: boolean): void {
   if (modalOpen.value) return
   previouslyPlaying = isPlaying.value
@@ -255,6 +367,9 @@ function openCalibration(existing: boolean): void {
     radius.value = calibration.value.radius
   }
   modalOpen.value = true
+  stationError.value = ''
+  void refreshStationProfile()
+  if (stationMode.value === 'auto') selectStation(selectedStation.value)
   nextTick(() => {
     // Metadata is loaded by the modal video. A new source starts at frame zero;
     // re-calibration uses the currently displayed frame.
@@ -277,6 +392,7 @@ function onCalibrationMetadata(): void {
     video.currentTime = Math.min(resumeAt, calibrationDuration.value)
   }
   calibrationTime.value = video.currentTime
+  if (stationMode.value === 'auto') selectStation(selectedStation.value)
 }
 function onCalibrationTime(): void {
   calibrationTime.value = calibrationVideo.value?.currentTime || 0
@@ -292,7 +408,9 @@ function onCalibrationSeek(event: Event): void {
   calibrationFrameReady.value = false
   v.currentTime = Number((event.target as HTMLInputElement).value)
   calibrationTime.value = v.currentTime
-  resetDraft()
+  // One ROI is reused while collecting multiple reference frames at
+  // different timestamps. Scrubbing must not erase its calibration.
+  if (stationMode.value === 'single') resetDraft()
 }
 function formatRect(rect: DOMRect | undefined): string {
   return rect
@@ -396,8 +514,11 @@ function closeCalibration(): void {
   if (screen.value === 'monitor' && previouslyPlaying) detection.play()
 }
 async function confirmCalibration(): Promise<void> {
-  if (!draftCalibration.value) return
-  const nextCalibration = draftCalibration.value
+  if (!readyToConfirm.value) return
+  const nextCalibration = stationMode.value === 'auto'
+    ? stationProfile.value?.stages.P1.calibration
+    : draftCalibration.value
+  if (!nextCalibration) return
   const selectedTime = calibrationVideo.value?.currentTime ?? calibrationTime.value
   calibrationFrameTime.value = Number.isFinite(selectedTime) ? selectedTime : 0
   const replacing = !!pendingFile.value
@@ -419,7 +540,7 @@ async function confirmCalibration(): Promise<void> {
   // Calibration preview may use the browser video decoder, but the monitoring
   // engine opens the same original disk file directly in Python/OpenCV.
   await nextTick()
-  await detection.open(activeVideoPath.value, nextCalibration, calibrationFrameTime.value)
+  await detection.open(activeVideoPath.value, nextCalibration, calibrationFrameTime.value, false, stationMode.value)
 }
 function onMainSeek(event: Event): void {
   if (seekDraft.value === null) {
@@ -448,7 +569,7 @@ async function retryPythonVideo(): Promise<void> {
   try {
     await window.desktop.backend.retry()
     if (calibration.value && activeVideoPath.value) {
-      await detection.open(activeVideoPath.value, calibration.value, currentTime.value)
+      await detection.open(activeVideoPath.value, calibration.value, currentTime.value, false, stationMode.value)
     }
   } catch (reason) {
     notify('Python 重连失败，请查看启动日志')
@@ -554,7 +675,7 @@ async function applyAlgorithmSettings(next: AlgorithmSettings): Promise<void> {
     settingsResumePlayback = false
     notify('算法参数已应用')
     if (calibration.value && activeVideoPath.value) {
-      await detection.open(activeVideoPath.value, calibration.value, currentTime.value, resume)
+      await detection.open(activeVideoPath.value, calibration.value, currentTime.value, resume, stationMode.value)
     }
   } catch (reason) {
     notify(userErrorText(reason))
@@ -573,12 +694,14 @@ function onEscape(event: KeyboardEvent): void {
 onMounted(() => {
   window.addEventListener('keydown', onEscape)
   void refreshUserStatus()
+  void refreshStationProfile()
   if (window.desktop?.backend) {
     unsubscribeBackendStatus = window.desktop.backend.onStatus((status) => {
       if (status === 'ready') {
         // Backend restart always invalidates administrator authentication.
         resetToOperator()
         void refreshUserStatus()
+        void refreshStationProfile()
       } else if (status === 'offline' || status === 'failed') {
         resetToOperator()
       }
@@ -636,7 +759,7 @@ onBeforeUnmount(() => {
     <template v-else>
       <main class="workspace">
         <section class="panel video-panel">
-          <div class="panel-heading"><span class="panel-title">检测画面</span><div class="heading-actions"><button class="btn btn-muted" @click="editCalibration">重新标注</button><button class="btn btn-muted" @click="chooseVideo">更换视频</button></div></div>
+          <div class="panel-heading"><span class="panel-title">检测画面</span><span v-if="stationMode === 'auto' && detectorResult" class="monitor-station-indicator">{{ detectorResult.stage === 'UNKNOWN' ? '工位未确认' : '工位 ' + (detectorResult.stage ?? '--') }}</span><div class="heading-actions"><button class="btn btn-muted" @click="editCalibration">重新标注</button><button class="btn btn-muted" @click="chooseVideo">更换视频</button></div></div>
           <div class="video-stage" ref="monitorStage">
             <div class="video-fit" :style="monitorViewportStyle">
               <img v-if="renderedFrame" class="video-element" :src="renderedFrame" alt="Python 逐帧推理后的检测画面"/>
@@ -656,7 +779,7 @@ onBeforeUnmount(() => {
         </section>
 
         <div class="right-column">
-          <section class="panel result-panel"><div><div class="data-label">当前检测结果</div><div class="status-unavailable" :class="{ 'status-good': resultStatus === 'OK', 'status-bad': resultStatus === 'NG', 'status-error': resultStatus === 'ERROR' }">{{ resultStatus }}</div><div v-if="resultStatus === 'ERROR' || resultStatus === '连接中' || resultStatus === 'WARMUP'" class="status-description" :title="resultDescription">{{ resultDescription }}</div></div><div class="result-divider"/><div><div class="data-label">S_water · 当前值</div><div class="result-score">{{ detectorResult ? detectorResult.s_water.toFixed(4) : '--' }}</div><div class="threshold-line">阈值 <b>{{ detectionThreshold.toFixed(4) }}</b></div></div></section>
+          <section class="panel result-panel"><div><div class="data-label">当前检测结果</div><div class="status-unavailable" :class="{ 'status-good': resultStatus === 'OK', 'status-bad': resultStatus === 'NG', 'status-error': resultStatus === 'ERROR' }">{{ resultStatus }}</div><div v-if="resultStatus === 'ERROR' || resultStatus === '连接中' || resultStatus === 'WARMUP' || resultStatus === 'PAUSED'" class="status-description" :title="resultDescription">{{ resultDescription }}</div></div><div class="result-divider"/><div><div class="data-label">S_water · 当前值</div><div class="result-score">{{ detectorResult ? detectorResult.s_water.toFixed(4) : '--' }}</div><div class="threshold-line">阈值 <b>{{ detectionThreshold.toFixed(4) }}</b></div></div></section>
           <section class="panel data-panel"><div class="panel-heading"><span class="panel-title">检测数据</span></div><div class="data-grid"><div class="metric"><div class="data-label">运行时间</div><div class="metric-value">{{ currentTime.toFixed(2) }} <small>s</small></div></div><div class="metric"><div class="data-label">S_water</div><div class="metric-value metric-blue">{{ detectorResult ? detectorResult.s_water.toFixed(4) : '--' }}</div></div><div class="metric"><div class="data-label">NG 阈值</div><div class="metric-value metric-orange">{{ detectionThreshold.toFixed(4) }}</div></div><div class="metric"><div class="data-label">异常持续时间</div><div class="metric-value">{{ detectorResult ? detectorResult.abnormal_run_s.toFixed(2) : '--' }} <small>s</small></div></div><div class="metric"><div class="data-label">异常扇区</div><div class="metric-value">{{ worstSector }}</div></div><div class="metric"><div class="data-label">扇区最大值</div><div class="metric-value">{{ detectorResult ? detectorResult.max_sector_score.toFixed(4) : '--' }}</div></div></div><div class="sector-summary"><span>检测区域</span><strong>{{ innerRadiusRatio.toFixed(2) }}R — {{ outerRadiusRatio.toFixed(2) }}R · {{ sectorCount }} 扇区</strong></div></section>
           <section class="panel chart-panel"><div class="panel-heading"><span class="panel-title">S_water 历史曲线</span><span class="chart-legend"><i/> S_water　 <b>┄</b> NG 阈值</span></div><div class="chart-body"><svg viewBox="0 0 520 140" preserveAspectRatio="none" role="img" aria-label="实时水流异常检测历史曲线"><path d="M50 18H510 M50 66H510 M50 115H510" class="chart-grid"/><path :d="`M50 ${chartThresholdY}H510`" class="chart-threshold"/><polyline v-if="chartPoints" :points="chartPoints" class="chart-series"/><text x="5" y="20">{{ chartMaximum.toFixed(3) }}</text><text x="5" :y="chartThresholdY + 2">{{ detectionThreshold.toFixed(3) }}</text><text x="5" y="118">0.000</text><text x="50" y="133">-5s</text><text x="480" y="133">当前</text><text v-if="!chartPoints" x="285" y="99" class="chart-empty">等待检测数据</text></svg></div></section>
         </div>
@@ -670,7 +793,32 @@ onBeforeUnmount(() => {
     <div v-if="modalOpen" class="modal-mask" @click.self="closeCalibration">
       <section class="calibration-modal" role="dialog" aria-modal="true" aria-labelledby="calibration-title">
         <div class="modal-header"><div><h2 id="calibration-title">标注晶圆位置</h2></div><div class="modal-header-actions"><button v-if="false" type="button" class="coordinate-toggle" :aria-pressed="coordinateCheckEnabled" @click="coordinateCheckEnabled = !coordinateCheckEnabled">{{ coordinateCheckEnabled ? '坐标校验：开' : '坐标校验：关' }}</button><button type="button" class="modal-close" title="取消标注" aria-label="取消标注" @click="closeCalibration">×</button></div></div>
-        <div class="modal-body"><div ref="calibrationStage" class="calibration-stage" :class="{ 'stage-ready': !!draftWidth }"><div class="video-fit calibration-fit" :style="calibrationViewportStyle" @click="onCalibrationClick"><video ref="calibrationVideo" :src="previewUrl" playsinline muted preload="metadata" @loadedmetadata="onCalibrationMetadata" @loadeddata="onCalibrationFrameReady" @timeupdate="onCalibrationTime" @seeking="calibrationFrameReady = false" @seeked="onCalibrationFrameReady" @error="notify('无法读取视频，请尝试其他格式')"/><svg ref="calibrationSvg" class="roi-overlay" :viewBox="draftOverlaySize" preserveAspectRatio="none" aria-hidden="true"><template v-if="center"><path :d="`M ${center.x-13} ${center.y} h26 M ${center.x} ${center.y-13} v26`" class="calib-cross"/><circle :cx="center.x" :cy="center.y" r="4" fill="#59d7ff"/></template><template v-if="draftCalibration"><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius" class="calib-wafer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * outerRadiusRatio" class="ring-outer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * innerRadiusRatio" class="ring-inner"/></template></svg></div></div>
+        <div class="modal-body">
+          <div class="station-mode-tabs" role="group" aria-label="工位标定模式">
+            <button type="button" :class="{ active: stationMode === 'single' }" @click="chooseStationMode('single')">单工位</button>
+            <button type="button" :class="{ active: stationMode === 'auto' }" @click="chooseStationMode('auto')">三工位自动</button>
+          </div>
+          <div v-if="stationMode === 'auto'" class="station-setup">
+            <div class="station-tabs" role="group" aria-label="选择晶圆工位">
+              <button v-for="stage in STAGES" :key="stage" type="button" :class="{ active: selectedStation === stage }" @click="selectStation(stage)">
+                {{ stage }} <small>{{ stationProfile?.stages[stage].references.length ?? 0 }}/{{ currentStageMin }}</small>
+              </button>
+            </div>
+            <div class="station-reference-controls">
+              <button type="button" class="btn btn-primary" :disabled="!draftCalibration || stationBusy || currentStageReferences.length >= 12" @click="captureCurrentReference">
+                {{ stationBusy ? '采集中…' : '保存 ROI 并采集当前帧' }}
+              </button>
+              <span>三个工位各需至少 {{ currentStageMin }} 张不同画面的参考帧</span>
+            </div>
+            <div v-if="currentStageReferences.length" class="station-reference-list">
+              <span v-for="refItem in currentStageReferences" :key="refItem.id" class="station-reference-chip">
+                {{ refItem.source }} · {{ formatTime(refItem.time_s) }}
+                <button type="button" :disabled="stationBusy" :aria-label="'删除' + selectedStation + '参考帧'" @click="deleteCurrentReference(refItem.id)">×</button>
+              </span>
+            </div>
+            <p v-if="stationError" class="station-error" role="alert">{{ stationError }}</p>
+          </div>
+          <div ref="calibrationStage" class="calibration-stage" :class="{ 'stage-ready': !!draftWidth }"><div class="video-fit calibration-fit" :style="calibrationViewportStyle" @click="onCalibrationClick"><video ref="calibrationVideo" :src="previewUrl" playsinline muted preload="metadata" @loadedmetadata="onCalibrationMetadata" @loadeddata="onCalibrationFrameReady" @timeupdate="onCalibrationTime" @seeking="calibrationFrameReady = false" @seeked="onCalibrationFrameReady" @error="notify('无法读取视频，请尝试其他格式')"/><svg ref="calibrationSvg" class="roi-overlay" :viewBox="draftOverlaySize" preserveAspectRatio="none" aria-hidden="true"><template v-if="center"><path :d="`M ${center.x-13} ${center.y} h26 M ${center.x} ${center.y-13} v26`" class="calib-cross"/><circle :cx="center.x" :cy="center.y" r="4" fill="#59d7ff"/></template><template v-if="draftCalibration"><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius" class="calib-wafer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * outerRadiusRatio" class="ring-outer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * innerRadiusRatio" class="ring-inner"/></template></svg></div></div>
           <div class="calib-timeline"><span>定位画面</span><input type="range" aria-label="标注画面位置" min="0" :max="calibrationDuration || 1" step="0.01" :value="calibrationTime" :style="{ '--progress': calibrationProgress + '%' }" :disabled="!calibrationDuration" @input="onCalibrationSeek"/><span>{{ formatTime(calibrationTime) }} / {{ formatTime(calibrationDuration) }}</span></div>
           <div class="calibration-status"><strong>{{ calibrationPhase }}</strong><span>{{ calibrationMeasure }}</span></div>
           <div v-if="coordinateCheckEnabled" class="coordinate-debug">
@@ -686,7 +834,7 @@ onBeforeUnmount(() => {
             <div v-else class="coordinate-debug-hint">请先点击画面中的晶圆中心</div>
           </div>
         </div>
-        <div class="modal-footer"><span>{{ calibrationPhase }}</span><div><button class="btn btn-muted" :disabled="!center" @click="resetDraft">重置</button><button class="btn btn-primary" :disabled="!readyToConfirm" @click="confirmCalibration">确认</button></div></div>
+        <div class="modal-footer"><span>{{ stationMode === 'auto' ? (stationProfile?.ready ? '三工位已就绪' : '请完成三个工位的 ROI 与参考帧') : calibrationPhase }}</span><div><button class="btn btn-muted" :disabled="!center" @click="resetDraft">重置</button><button class="btn btn-primary" :disabled="!readyToConfirm" @click="confirmCalibration">确认</button></div></div>
       </section>
       <template v-if="coordinateCheckEnabled">
         <div v-for="(marker, index) in clickMarkers" :key="index" class="raw-click-marker" :class="{ 'marker-edge': marker.kind === '边缘' }" :style="{ left: marker.x + 'px', top: marker.y + 'px' }"><span>{{ marker.kind }}点击</span></div>

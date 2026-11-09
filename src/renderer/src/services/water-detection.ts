@@ -34,7 +34,11 @@ export interface DetectionResult {
   session_id: string
   /** Set by the Python-owned source-video stream; not by the old frame bridge. */
   frame_index?: number
-  status: 'WARMUP' | 'OK' | 'NG'
+  status: 'WARMUP' | 'OK' | 'NG' | 'PAUSED'
+  stage?: 'P1' | 'P2' | 'P3' | 'UNKNOWN'
+  reason?: string
+  position_confidence?: number
+  position_scores?: Record<string, number>
   s_water: number
   history_ready: boolean
   s_water_threshold: number

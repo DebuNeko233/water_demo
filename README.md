@@ -5,8 +5,9 @@
 ## 当前功能（Python 视频引擎 + Electron 显示界面）
 
 - 选择本地视频文件，弹出晶圆位置标注模态框。
-- 通过两次点击确定晶圆中心和边缘半径；可在标注时拖动进度条定位画面。
-- 模态框右下角提供**重置**与**确认**；未完成两点标注时不能确认。
+- 标定窗口支持「单工位」与「三工位自动」：三工位分别选择 P1/P2/P3，标注晶圆中心/半径，并从视频不同时间点采集各至少 **5 张**参考帧（最多 12 张）。每个工位的 ROI 和参考截图保存在本机设备配置目录，跨重启复用。
+- 三工位完整配置之前无法开始自动检测；参考图像由 Python/OpenCV 原帧无损保存，前端只操作视频时间与标定点。
+- 单工位保持原有两次点击标注与「确认」流程；可拖动进度条定位画面。
 - 进入监测页后，**Python/OpenCV 打开原始本地视频并按源 FPS 逐帧推理**；支持播放、暂停、跳转、重新标注、替换视频。
 - **Python 在判定后绘制图像**（原版圆环、扇区、持续异常像素红色区域）；Electron 接收处理过的图像，与对应的数值同步显示。
 - 右侧采用原 `main1_chn.py` 的指标布局，包括状态、S_water、阈值、异常持续时间、异常扇区及历史曲线。
@@ -15,6 +16,10 @@
 - 管理员批准的算法设置由 **Python 后端保存并强制应用**，跨应用重启保留；操作员运行视频时始终使用管理员最后保存的参数。保存时当前视频位置保持，历史记录重新预热。
 
 **用户权限与密码。** 管理员密码只在本机首次切换时设置，无固定默认密码；后端用随机盐和 PBKDF2-SHA256 保存密码哈希到应用数据目录 `users/admin.json`，不会以明文保存在前端。管理员认证令牌仅保存在当前页面内存，软件/后端重启后自动恢复操作员。连续输错密码会短暂锁定登录。忘记密码时需要由有本机文件访问权限的人在退出软件后备份并删除 `users/admin.json`，**这也会清空管理员已保存的算法参数**；重新进入管理员时重新设置。该功能为本机使用权限管理，不替代操作系统文件保护与企业级身份认证。
+
+**三工位自动识别流程：** 在标定窗口选「三工位自动」→ 点 P1，暂停至晶圆位于 P1 的清晰画面，两次点击中心与边缘，点「保存 ROI 并采集当前帧」；拖动进度条至另外至少 4 个明显不同的画面（尽量覆盖喷头不同位置）继续采集。按相同方式完成 P2 和 P3，各不少于 5 张，最后点「确认」。以后相同设备及分辨率的录像可复用已保存的 3 个工位配置；如果画面分辨率变化，必须重新标定和采集。确认后监测页会标明当前识别的工位，CSV 新增 `stage`、`position_confidence`、`position_reason`。其中 `PAUSED` 表示位置未知或仍在连续确认，不属于 OK/NG。
+
+**位置识别与原算法的边界：** 参考 [water_detector](https://github.com/DebuNeko233/water_detector) 的 `PositionRecognizer`，使用灰度 Sobel 边缘图与参考图比较；采用多帧中位数、动态边缘降权和三个 ROI 并集空间加权。只有最高分不低于 0.78 且高于次优至少 0.035，连续 3 帧匹配同一位置，才允许使用该位置的 ROI。否则跳过当前帧的水流判定，输出 `PAUSED`；工位切换时重建该工位检测器，恢复 `WARMUP`。这些 0.78、0.035、3 帧目前是待实机验证的保守初值，不能当作已经验证的准确率。**`main1_chn.py` 的 `WaterDetector.process()` 和阈值完全不变。**
 
 **判断算法唯一基准：`main1_chn.py`。** `water_detection.py` 保留上传源码中 `DemoConfig`、`Calibration`、`WaterDetector` 的全部执行语句和默认值。在仓库测试夹具中保留用户上传的完整原始 `main1_chn.py`，自动化测试在同一 Python 运行时直接对比三个类的 AST，锁定其可执行逻辑，并使用相同 BGR 视频帧直接对比 Python API 与 `WaterDetector.process()` 的 `S_water`、扇区分数、状态和持续时间。**不得因网络/性能跳帧自动重置判定器**；只有用户明确更换视频、seek、重新标定或保存新设置才开启新会话。8 FPS 与全帧率输入不同，因此计算结果仍可能不同；原算法不允许自行调整。
 
@@ -77,6 +82,9 @@ Windows 绿色程序输出在 `dist/win-unpacked/`，执行 `ZeboVision.exe`。�
 - `backend/src/sample_backend/services/water_detection.py`：从用户原始 `main1_chn.py` 提取的 WaterDetector 算法。
 - `backend/src/sample_backend/services/water_session.py`：旧单帧检测桥接（兼容与回归测试用）。
 - `backend/src/sample_backend/services/video_stream.py`：Python 全帧率视频读取、检测和图像/指标原子输出。
+- `backend/src/sample_backend/services/station_position.py`：P1/P2/P3 校准数据、原始 PNG 参考帧持久化、保守位置相似度判断。
+- `backend/src/sample_backend/api/stations.py`：`/api/stations/profile`、`/api/stations/calibration`、`/api/stations/reference`、`/api/stations/reference/remove`。
+- `src/renderer/src/services/station-profile.ts`：三个工位的前后端类型与配置 API。
 - `backend/src/sample_backend/services/frame_renderer.py`：原始脚本判定后的显示绘制（不影响判定）。
 - `backend/src/sample_backend/api/video.py`：`/api/video/open`、`/api/video/next`、`/api/video/seek`。
 - `backend/src/sample_backend/api/detection.py`：`/api/detection/start`、`/api/detection/frame`。
