@@ -45,11 +45,11 @@ test('reference frame payload uses source path and Python seek rather than rende
 
 test('calibration modal close button has an easy-to-hit target', () => {
   const style = read('src/renderer/src/styles/zebovision.css')
-  const rule = style.match(/\\.modal-close\\{([^}]*)\\}/)?.[1]
+  const rule = style.match(/\.modal-close\{([^}]*)\}/)?.[1]
   assert.ok(rule, 'close button must have its own style')
   assert.match(rule, /(?:^|;)width:48px(?:;|$)/)
   assert.match(rule, /(?:^|;)height:48px(?:;|$)/)
   assert.match(rule, /(?:^|;)flex:0 0 48px(?:;|$)/)
-  assert.match(style, /\\.modal-close:hover\\{[^}]*background:/)
+  assert.match(style, /\.modal-close:hover\{[^}]*background:/)
   assert.match(app, /class="modal-close"[^>]*@click="closeCalibration"/)
 })
