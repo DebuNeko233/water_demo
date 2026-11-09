@@ -65,3 +65,23 @@ test('P3 has independent nozzle A/B reference selectors for a shared ROI', () =>
   assert.ok(backendStation.includes('MIN_REFS = 3'))
   assert.ok(backendStation.includes('scores[stage] = max(group_scores)'))
 })
+
+test('device ZIP import/export uses native dialogs and administrator privileges', () => {
+  const main = read('src/main/index.ts')
+  const preload = read('src/preload/index.ts')
+  const bridge = read('src/shared/bridge.ts')
+  const archiveApi = read('backend/src/sample_backend/api/stations.py')
+  assert.ok(app.includes('v-if="currentRole === \'admin\'" class="station-archive-actions"'))
+  assert.ok(app.includes('window.confirm('))
+  assert.ok(app.includes('exportStationArchive(path, adminToken.value)'))
+  assert.ok(app.includes('importStationArchive(path, adminToken.value)'))
+  assert.ok(service.includes("'/api/stations/archive/export'"))
+  assert.ok(service.includes("'/api/stations/archive/import'"))
+  for (const id of ['choose-profile-archive', 'save-profile-archive']) {
+    assert.ok(main.includes('system:' + id))
+    assert.ok(preload.includes('system:' + id))
+  }
+  assert.ok(bridge.includes('chooseProfileArchive(): Promise<string | null>'))
+  assert.ok(bridge.includes('saveProfileArchive(): Promise<string | null>'))
+  assert.ok(archiveApi.includes('except AccessDenied as exc:'))
+})
