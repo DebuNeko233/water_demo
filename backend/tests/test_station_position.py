@@ -257,3 +257,42 @@ def test_two_p3_nozzle_appearances_use_one_roi(monkeypatch, tmp_path):
     with TestClient(create_app()) as client:
         profile = client.get('/api/stations/profile').json()
         assert len(profile['stages']['P3']['references']) == 6
+
+def test_approved_station_threshold_applies_to_auto_video(monkeypatch, tmp_path):
+    """Operator video uses the administrator's station matching threshold."""
+    monkeypatch.setenv('APP_DATA_DIR', str(tmp_path / 'profile'))
+    source = make_video(tmp_path)
+    with TestClient(create_app()) as client:
+        build_profile(client, source)
+        token = client.post('/api/users/setup', json={
+            'password': 'Threshold#984',
+        }).json()['admin_token']
+        result = client.post('/api/users/settings', json={
+            'admin_token': token,
+            'settings': {'station_match_threshold': .93},
+        })
+        assert result.status_code == 200, result.text
+        assert result.json()['settings']['station_match_threshold'] == .93
+        opened = client.post('/api/video/open', json={
+            'file_path': str(source), 'stage_mode': 'auto',
+            'calibration': {'cx':48, 'cy':26, 'radius':26,'width':96,'height':96},
+        })
+        assert opened.status_code == 200, opened.text
+        assert opened.json()['station_match_threshold'] == .93
+        assert client.app.state.video_stream._recognizer.threshold == .93
+        # No operator override is allowed even for this non-water setting.
+        blocked = client.post('/api/video/open', json={
+            'file_path': str(source), 'stage_mode': 'auto',
+            'calibration': {'cx':48, 'cy':26, 'radius':26,'width':96,'height':96},
+            'detector': {'station_match_threshold': .50},
+        })
+        assert blocked.status_code == 403
+        # Non-recognized scores must continue to pause rather than claim OK.
+        model = client.app.state.video_stream._recognizer
+        assert model.classify(np.zeros((96,96,3), dtype=np.uint8))[0] == 'UNKNOWN'
+        for invalid in (.49, 1.0):
+            denied = client.post('/api/users/settings', json={
+                'admin_token': token,
+                'settings': {'station_match_threshold': invalid},
+            })
+            assert denied.status_code == 422
