@@ -8,6 +8,7 @@
  */
 import { onBeforeUnmount, ref } from 'vue'
 import type { DetectionResult, WaferCalibration } from '../services/water-detection'
+import type { StageMode } from '../services/station-profile'
 import {
   openPythonVideo, readPythonVideoFrame, seekPythonVideo,
   type AnnotatedFrame,
@@ -118,7 +119,7 @@ export function usePythonVideoStream() {
 
   async function open(
     filePath: string, calibration: WaferCalibration,
-    timeS: number, autoplay = false,
+    timeS: number, autoplay = false, stageMode: StageMode = 'single',
   ): Promise<void> {
     invalidate()
     const epoch = version
@@ -127,7 +128,7 @@ export function usePythonVideoStream() {
     // response from advancing the newly opened Python VideoCapture.
     const request = commandChain.then(async () => {
       if (pendingRead) await pendingRead.catch(() => undefined)
-      return openPythonVideo(filePath, calibration, Math.max(0, timeS))
+      return openPythonVideo(filePath, calibration, Math.max(0, timeS), stageMode)
     })
     commandChain = request.then(() => undefined, () => undefined)
     try {
