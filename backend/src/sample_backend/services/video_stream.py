@@ -108,13 +108,15 @@ class PythonVideoStream:
                 raise InvalidFrame('Unable to determine source video FPS')
             # API route resolves the approved, persistent settings; direct
             # callers without an override use original DemoConfig defaults.
-            cfg = DemoConfig(**(req.detector or DetectorSettings()).model_dump())
+            approved = req.detector or DetectorSettings()
+            cfg = DemoConfig(**approved.model_dump(exclude={'station_match_threshold'}))
             stage_profile = None
             recognizer = None
             if req.stage_mode == 'auto':
                 if self._profile is None:
                     raise InvalidFrame('三工位参考帧配置尚未初始化')
                 stage_profile, recognizer = self._profile.build(width, height)
+                recognizer.threshold = approved.station_match_threshold
             detector = WaterDetector((height, width), fps,
                                      Calibration(cal.cx, cal.cy, cal.radius), cfg)
             with self._lock:
@@ -152,7 +154,10 @@ class PythonVideoStream:
                 'sector_count': self._config.sector_count,
                 'inner_radius_ratio': self._config.inner_radius_ratio,
                 'outer_radius_ratio': self._config.outer_radius_ratio,
-                'stage_mode': self._mode}
+                'stage_mode': self._mode,
+                'station_match_threshold': (
+                    self._recognizer.threshold if self._recognizer is not None
+                    else 0.78),}
 
     def _seek_capture(self, time_s: float) -> None:
         assert self._cap is not None
