@@ -3,10 +3,12 @@ import type { WaferCalibration } from './water-detection'
 
 export type StageKey = 'P1' | 'P2' | 'P3'
 export type StageMode = 'single' | 'auto'
+export type ReferenceGroup = 'default' | 'nozzle_a' | 'nozzle_b'
 export const STAGES: StageKey[] = ['P1', 'P2', 'P3']
 
 export interface StageReference {
   id: string
+  group?: ReferenceGroup
   time_s: number
   source: string
 }
@@ -28,9 +30,9 @@ export function saveStationCalibration(stage: StageKey, calibration: WaferCalibr
     stage, calibration,
   })
 }
-export function captureStationReference(stage: StageKey, filePath: string, timeS: number): Promise<StationProfile> {
+export function captureStationReference(stage: StageKey, filePath: string, timeS: number, group: ReferenceGroup = 'default'): Promise<StationProfile> {
   return window.desktop.backend.request<StationProfile>('POST', '/api/stations/reference', {
-    stage, file_path: filePath, time_s: timeS,
+    stage, file_path: filePath, time_s: timeS, group,
   })
 }
 export function removeStationReference(stage: StageKey, referenceId: string): Promise<StationProfile> {
