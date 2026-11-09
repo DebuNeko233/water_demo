@@ -296,3 +296,23 @@ def test_approved_station_threshold_applies_to_auto_video(monkeypatch, tmp_path)
                 'settings': {'station_match_threshold': invalid},
             })
             assert denied.status_code == 422
+
+
+def test_station_threshold_changes_unknown_gate_without_changing_water_detector(monkeypatch, tmp_path):
+    monkeypatch.setenv('APP_DATA_DIR', str(tmp_path / 'profile'))
+    source = make_video(tmp_path)
+    with TestClient(create_app()) as client:
+        build_profile(client, source)
+        _, model = client.app.state.station_profile.build(96, 96)
+        p1_ids = {id(ref) for ref in model.references['P1']['default']}
+        # Controlled per-reference scores isolate the confidence gate from
+        # camera/nozzle variations. The P1 score stays 0.82 in both cases.
+        monkeypatch.setattr(model, '_corr', lambda current, ref, weights:
+                            .82 if id(ref) in p1_ids else .40)
+        model.threshold = .83
+        assert model.classify(wafer_frame('P1', 1))[0] == 'UNKNOWN'
+        model.threshold = .80
+        stage, score, scores = model.classify(wafer_frame('P1', 1))
+        assert stage == 'P1'
+        assert abs(score - .82) < 1e-6
+        assert scores['P2'] == .40 and scores['P3'] == .40
