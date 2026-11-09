@@ -56,7 +56,7 @@ def build_profile(client, source):
             },
         })
         assert resp.status_code == 200, resp.text
-        for j in range(5):
+        for j in range(3):
             time_s = (i * 25 + j * 5) / 30
             response = client.post('/api/stations/reference', json={
                 'stage': stage, 'file_path': str(source), 'time_s': time_s,
@@ -73,9 +73,9 @@ def test_all_three_stations_capture_persist_and_abstain(monkeypatch, tmp_path):
         profile = build_profile(client, source)
         assert profile['ready'] is True
         for stage in STAGES:
-            assert len(profile['stages'][stage]['references']) == 5
+            assert len(profile['stages'][stage]['references']) == 3
         saved = list((tmp_path / 'app-data' / 'stations').glob('*.png'))
-        assert len(saved) == 15
+        assert len(saved) == 9
         store = client.app.state.station_profile
         snap, model = store.build(96, 96)
         assert model.ready
@@ -94,7 +94,7 @@ def test_all_three_stations_capture_persist_and_abstain(monkeypatch, tmp_path):
         assert deleted.status_code == 200
         assert deleted.json()['ready'] is False
     with TestClient(create_app()) as client:
-        assert len(client.get('/api/stations/profile').json()['stages']['P1']['references']) == 4
+        assert len(client.get('/api/stations/profile').json()['stages']['P1']['references']) == 2
 
 
 def test_auto_video_pauses_until_stable_then_matches_original_detector(monkeypatch, tmp_path):
@@ -183,8 +183,8 @@ def test_moving_roi_invalidates_its_old_reference_snapshots(monkeypatch, tmp_pat
         profile = updated.json()
         assert profile['ready'] is False
         assert profile['stages']['P1']['references'] == []
-        assert len(profile['stages']['P2']['references']) == 5
-        assert len(profile['stages']['P3']['references']) == 5
+        assert len(profile['stages']['P2']['references']) == 3
+        assert len(profile['stages']['P3']['references']) == 3
         for ident in ids:
             assert not (tmp_path / 'profile' / 'stations' / (ident + '.png')).exists()
         assert client.post('/api/video/open', json={
@@ -192,3 +192,67 @@ def test_moving_roi_invalidates_its_old_reference_snapshots(monkeypatch, tmp_pat
             'calibration': {'cx': 48, 'cy': 48, 'radius': 26,
                             'width': 96, 'height': 96},
         }).status_code == 422
+
+
+def test_three_refs_per_stage_required_even_when_p3_groups_are_mixed(monkeypatch, tmp_path):
+    monkeypatch.setenv('APP_DATA_DIR', str(tmp_path / 'profile'))
+    source = make_video(tmp_path)
+    with TestClient(create_app()) as client:
+        profile = build_profile(client, source)
+        assert profile['minimum_references'] == 3
+        # Three valid P3 nozzle-A frames can be extended with an independent
+        # nozzle-B appearance, without changing the wafer's P3 calibration.
+        assert profile['stages']['P3']['references'][0]['group'] == 'nozzle_a'
+        refs = profile['stages']['P3']['references']
+        for ref in refs[1:]:
+            assert client.post('/api/stations/reference/remove', json={
+                'stage': 'P3', 'reference_id': ref['id'],
+            }).status_code == 200
+        assert client.get('/api/stations/profile').json()['ready'] is False
+
+
+def test_two_p3_nozzle_appearances_use_one_roi(monkeypatch, tmp_path):
+    monkeypatch.setenv('APP_DATA_DIR', str(tmp_path / 'profile'))
+    source = make_video(tmp_path)
+    secondary = tmp_path / 'p3-nozzle-b.avi'
+    writer = cv2.VideoWriter(str(secondary), cv2.VideoWriter_fourcc(*'MJPG'), 30, (96, 96))
+    assert writer.isOpened()
+
+    def nozzle_b_frame(t: int):
+        frame = wafer_frame('P3', t)
+        # An alternate physical nozzle consistently occupies the opposite
+        # part of the camera view. The wafer and its ROI remain unchanged.
+        cv2.rectangle(frame, (54, 38), (95, 64), (28, 29, 30), -1)
+        cv2.line(frame, (54, 43), (91, 58), (215, 217, 219), 3)
+        return frame
+
+    for t in range(20):
+        writer.write(nozzle_b_frame(t))
+    writer.release()
+    with TestClient(create_app()) as client:
+        build_profile(client, source)
+        for j in range(3):
+            response = client.post('/api/stations/reference', json={
+                'stage': 'P3', 'group': 'nozzle_b',
+                'file_path': str(secondary), 'time_s': j * 5 / 30,
+            })
+            assert response.status_code == 200, response.text
+        profile = client.get('/api/stations/profile').json()
+        assert profile['ready'] is True
+        groups = [ref['group'] for ref in profile['stages']['P3']['references']]
+        assert groups.count('nozzle_a') == 3
+        assert groups.count('nozzle_b') == 3
+        _, recognizer = client.app.state.station_profile.build(96, 96)
+        for scene in (wafer_frame('P3', 1), nozzle_b_frame(1)):
+            stage, confidence, scores = recognizer.classify(scene)
+            assert stage == 'P3', (stage, confidence, scores)
+        assert recognizer.classify(np.zeros((96, 96, 3), dtype=np.uint8))[0] == 'UNKNOWN'
+        # A nozzle label is not another wafer position: no custom P1/P2 bank.
+        invalid = client.post('/api/stations/reference', json={
+            'stage': 'P2', 'group': 'nozzle_b',
+            'file_path': str(source), 'time_s': 0.0,
+        })
+        assert invalid.status_code == 422
+    with TestClient(create_app()) as client:
+        profile = client.get('/api/stations/profile').json()
+        assert len(profile['stages']['P3']['references']) == 6
