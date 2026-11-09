@@ -172,9 +172,16 @@ class StageProfileStore:
             calibration = req.calibration.model_dump()
             # Invalidate reference images when a calibration changes size;
             # keeping old references would silently compare different devices.
-            clear = old['calibration'] is not None and (
-                old['calibration']['width'], old['calibration']['height']) != (
-                calibration['width'], calibration['height'])
+            previous = old['calibration']
+            clear = previous is not None and (
+                (previous['width'], previous['height']) !=
+                (calibration['width'], calibration['height'])
+                or abs(previous['cx'] - calibration['cx']) >
+                max(2.0, previous['radius'] * .03)
+                or abs(previous['cy'] - calibration['cy']) >
+                max(2.0, previous['radius'] * .03)
+                or abs(previous['radius'] - calibration['radius']) >
+                max(2.0, previous['radius'] * .03))
             new = {'calibration': calibration,
                    'references': [] if clear else list(old['references'])}
             self._profile['stages'][stage] = new
