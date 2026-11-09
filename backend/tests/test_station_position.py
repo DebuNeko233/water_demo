@@ -164,3 +164,31 @@ def test_profiles_reject_mismatched_resolution(monkeypatch, tmp_path):
             'calibration': {'cx':48, 'cy':26, 'radius':26, 'width':96, 'height':96},
         })
         assert invalid.status_code == 422
+
+
+def test_moving_roi_invalidates_its_old_reference_snapshots(monkeypatch, tmp_path):
+    monkeypatch.setenv('APP_DATA_DIR', str(tmp_path / 'profile'))
+    source = make_video(tmp_path)
+    with TestClient(create_app()) as client:
+        original = build_profile(client, source)
+        ids = [ref['id'] for ref in original['stages']['P1']['references']]
+        updated = client.post('/api/stations/calibration', json={
+            'stage': 'P1',
+            'calibration': {
+                'cx': 48, 'cy': 48, 'radius': 26,
+                'width': 96, 'height': 96,
+            },
+        })
+        assert updated.status_code == 200, updated.text
+        profile = updated.json()
+        assert profile['ready'] is False
+        assert profile['stages']['P1']['references'] == []
+        assert len(profile['stages']['P2']['references']) == 5
+        assert len(profile['stages']['P3']['references']) == 5
+        for ident in ids:
+            assert not (tmp_path / 'profile' / 'stations' / (ident + '.png')).exists()
+        assert client.post('/api/video/open', json={
+            'file_path': str(source), 'stage_mode': 'auto',
+            'calibration': {'cx': 48, 'cy': 48, 'radius': 26,
+                            'width': 96, 'height': 96},
+        }).status_code == 422
