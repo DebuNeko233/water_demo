@@ -58,7 +58,8 @@ class ReferencePositionRecognizer:
     """Match only stable edge features, abstain instead of guessing on ambiguity."""
 
     def __init__(self, samples: dict[str, list[np.ndarray]],
-                 threshold: float = .78, margin: float = .035):
+                 threshold: float = .78, margin: float = .035,
+                 spatial_mask: np.ndarray | None = None):
         self.threshold = threshold
         self.margin = margin
         self.references: dict[str, list[np.ndarray]] = {}
@@ -74,6 +75,13 @@ class ReferencePositionRecognizer:
             median = np.median(descriptors, axis=0)
             spread = np.median(np.abs(descriptors - median), axis=0)
             stable = np.clip(1.0 - spread / (median + 10.0), 0.15, 1.0)
+            if spatial_mask is not None:
+                # Fixed chamber background can be nearly identical at all
+                # stations; focus recognition on the union of the three
+                # marked wafer regions. Keep a small context contribution.
+                if spatial_mask.shape != stable.shape:
+                    raise ValueError('Invalid station spatial mask shape')
+                stable *= (0.10 + 0.90 * spatial_mask)
             self.masks[stage] = stable.astype(np.float32)
 
     @property
@@ -268,7 +276,18 @@ class StageProfileStore:
                     if frame is None or frame.shape[:2] != (height, width):
                         raise InvalidFrame('参考截图丢失或分辨率错误，请重新采集')
                     samples[stage].append(frame)
-            model = ReferencePositionRecognizer(samples)
+            # The wafer may appear at any of three positions; compare its
+            # edge structure across those areas, not the static chamber walls.
+            yy, xx = np.ogrid[:96, :128]
+            spatial = np.zeros((96, 128), dtype=np.float32)
+            for stage in STAGES:
+                cal = snap['stages'][stage]['calibration']
+                x = cal['cx'] * 128.0 / width
+                y = cal['cy'] * 96.0 / height
+                rx = max(2., cal['radius'] * 1.15 * 128.0 / width)
+                ry = max(2., cal['radius'] * 1.15 * 96.0 / height)
+                spatial[((xx - x) / rx) ** 2 + ((yy - y) / ry) ** 2 <= 1.] = 1.
+            model = ReferencePositionRecognizer(samples, spatial_mask=spatial)
             if not model.ready:
                 raise InvalidFrame('参考帧模型未就绪')
             return snap, model
