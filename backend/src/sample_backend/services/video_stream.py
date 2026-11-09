@@ -56,6 +56,7 @@ class PythonVideoStream:
         self._width = 0
         self._height = 0
         self._config = DemoConfig()
+        self._station_match_threshold = 0.78
         self._history: deque[dict] = deque(maxlen=1500)
         self._mode = 'single'
         self._recognizer: ReferencePositionRecognizer | None = None
@@ -129,6 +130,7 @@ class PythonVideoStream:
                 self._frame_count = frame_count
                 self._duration = frame_count / fps if frame_count else 0.0
                 self._config = cfg
+                self._station_match_threshold = approved.station_match_threshold
                 self._mode = req.stage_mode
                 self._recognizer = recognizer
                 self._stage_calibrations = (stage_profile['stages'] if stage_profile else {})
@@ -155,9 +157,7 @@ class PythonVideoStream:
                 'inner_radius_ratio': self._config.inner_radius_ratio,
                 'outer_radius_ratio': self._config.outer_radius_ratio,
                 'stage_mode': self._mode,
-                'station_match_threshold': (
-                    self._recognizer.threshold if self._recognizer is not None
-                    else 0.78),}
+                'station_match_threshold': self._station_match_threshold}
 
     def _seek_capture(self, time_s: float) -> None:
         assert self._cap is not None
