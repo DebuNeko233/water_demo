@@ -85,3 +85,14 @@ test('device ZIP import/export uses native dialogs and administrator privileges'
   assert.ok(bridge.includes('saveProfileArchive(): Promise<string | null>'))
   assert.ok(archiveApi.includes('except AccessDenied as exc:'))
 })
+
+test('station threshold is adjustable in the administrator settings modal', () => {
+  const settings = read('src/renderer/src/utils/algorithm-settings.mjs')
+  const modal = read('src/renderer/src/components/AlgorithmSettingsModal.vue')
+  const backend = read('backend/src/sample_backend/services/video_stream.py')
+  assert.ok(settings.includes("title: '工位识别'"))
+  assert.ok(settings.includes("key: 'station_match_threshold'"))
+  assert.ok(modal.includes('visibleAlgorithmGroups = ALGORITHM_GROUPS.filter('))
+  assert.ok(backend.includes('recognizer.threshold = approved.station_match_threshold'))
+  assert.ok(backend.includes("exclude={'station_match_threshold'}"))
+})
