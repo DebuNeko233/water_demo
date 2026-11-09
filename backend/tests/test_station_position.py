@@ -237,6 +237,7 @@ def test_two_p3_nozzle_appearances_use_one_roi(monkeypatch, tmp_path):
                 'file_path': str(secondary), 'time_s': j * 5 / 30,
             })
             assert response.status_code == 200, response.text
+            assert response.json()['ready'] is (j == 2)
         profile = client.get('/api/stations/profile').json()
         assert profile['ready'] is True
         groups = [ref['group'] for ref in profile['stages']['P3']['references']]
