@@ -135,3 +135,12 @@ Vue 组件
 - 没有对任意硬件设备的安全停机保证；安全动作需要业务/硬件实现。
 - 没有自动为任意 Python 原生依赖收集额外 DLL 的机制。
 - 打包版的主进程生命周期回归测试不等于所有 Windows 机型的离线兼容性认证。
+
+## 设备标定 ZIP 备份（新增）
+
+管理员在标定页面选择「导出设备配置 ZIP」或「导入设备配置 ZIP」：
+- Renderer → Preload → Main：白名单 IPC `system:save-profile-archive` / `system:choose-profile-archive` 调用 Electron 原生保存/打开文件窗口，只返回用户选择的路径，不暴露任意文件读写接口。
+- Renderer → Main → Python：`POST /api/stations/archive/export` 与 `POST /api/stations/archive/import`，请求包含 `file_path` 和 `admin_token`。Python 使用现有的 `x-session-token` 会话保护和 `LocalUserAccess` 管理员校验；普通操作员返回 403。
+- ZIP 包采用固定清单：`manifest.json`（格式和版本）、`stations/profile.json`（三个工位标定及 P3 喷头分组）、`stations/references/<id>.png`（所有无损参考图）、`detector/settings.json`（已批准的算法参数）。不包含管理员密码哈希、令牌、日志、视频源。
+- 导入先检查 ZIP 文件数量和大小、路径是否严格匹配参考 ID、标定格式、PNG 可解码性及图像尺寸，并在同目录写入暂存文件。校验通过后才替换配置目录及算法设置；后者失败时回滚原目录。导入成功会关闭旧的视频检测会话，界面重新选择标定后再启动。
+- 发行版标定位置为 `app.getPath('userData')/data/stations`，开发 Python 默认 `~/.python-electron-vue-sample/stations`；也可通过 `APP_DATA_DIR` 指定根目录。
