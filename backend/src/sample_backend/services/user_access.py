@@ -137,6 +137,12 @@ class LocalUserAccess:
             self._token = None
             return {'role': 'operator'}
 
+    def approved_settings(self, token: str) -> DetectorSettings:
+        """Only authenticated administrators may back up device settings."""
+        with self._lock:
+            self._check(token)
+            return self._settings().model_copy()
+
     def update_settings(self, token: str, settings: DetectorSettings) -> dict:
         with self._lock:
             self._check(token)
