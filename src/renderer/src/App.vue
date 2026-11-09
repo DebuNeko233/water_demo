@@ -115,7 +115,11 @@ const draftCalibration = computed<Calibration | null>(() =>
 )
 const readyToConfirm = computed(() =>
   stationMode.value === 'auto'
-    ? !!stationProfile.value?.ready && !stationBusy.value
+    ? !!stationProfile.value?.ready && !stationBusy.value &&
+      STAGES.every(s => {
+        const saved = stationProfile.value?.stages[s].calibration
+        return saved?.width === draftWidth.value && saved?.height === draftHeight.value
+      })
     : !!draftCalibration.value,
 )
 const selectedStageConfig = computed(() => stationProfile.value?.stages[selectedStation.value])
@@ -307,6 +311,10 @@ async function captureCurrentReference(): Promise<void> {
   if (stationBusy.value || !draftCalibration.value) return
   const file = pendingVideoPath.value || activeVideoPath.value
   if (!file) { stationError.value = '请先选择视频'; return }
+  if (calibrationVideo.value?.seeking) {
+    stationError.value = '请等待画面跳转结束，再采集参考帧'
+    return
+  }
   stationBusy.value = true
   stationError.value = ''
   try {
