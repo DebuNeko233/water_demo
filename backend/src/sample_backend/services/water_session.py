@@ -29,7 +29,7 @@ class CalibrationInput(BaseModel):
 
 
 class DetectorSettings(BaseModel):
-    """Editable numeric subset of the original DemoConfig (8 FPS is fixed)."""
+    """Approved water settings plus independent station matching threshold."""
     inner_radius_ratio: float = Field(DemoConfig.inner_radius_ratio, ge=0.05, le=1.5, allow_inf_nan=False)
     outer_radius_ratio: float = Field(DemoConfig.outer_radius_ratio, ge=0.05, le=1.5, allow_inf_nan=False)
     diff_threshold: float = Field(DemoConfig.diff_threshold, ge=0.0, le=255.0, allow_inf_nan=False)
