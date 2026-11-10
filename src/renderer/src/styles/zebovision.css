@@ -109,3 +109,58 @@
 .station-enabled-switch{display:flex;align-items:center;gap:5px;color:#a8c6d8;font-size:11px;cursor:pointer;white-space:nowrap}
 .station-enabled-switch input{width:15px;height:15px;accent-color:#33b6ed;cursor:pointer;margin:0}
 .station-enabled-switch:has(input:disabled){opacity:.55;cursor:not-allowed}
+
+
+/* Fit four inspection metrics to the existing two-by-two panel. */
+.data-panel .data-grid{
+  flex:1;
+  min-height:0;
+  align-content:stretch;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  grid-template-rows:repeat(2,minmax(0,1fr));
+  gap:clamp(7px,1.1vh,13px);
+  padding:clamp(8px,1.25vh,15px);
+}
+.data-panel .metric{
+  min-width:0;
+  min-height:0;
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  padding:clamp(7px,1.3vh,17px);
+}
+.data-panel .metric .data-label{
+  font-size:clamp(13px,1.3vw,16px);
+  font-weight:550;
+  line-height:1.35;
+}
+.data-panel .metric-value{
+  font-size:clamp(24px,min(2.4vw,3.7vh),34px);
+  font-weight:750;
+  line-height:1.15;
+  margin-top:clamp(5px,1vh,12px);
+  letter-spacing:-.3px;
+  font-variant-numeric:tabular-nums;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.data-panel .metric-value small{
+  font-size:clamp(13px,1.15vw,17px);
+  font-weight:500;
+}
+.video-panel .heading-actions .video-open-icon{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  flex:0 0 38px;
+  width:38px;
+  height:36px;
+  padding:0;
+}
+.video-open-icon svg{display:block;width:20px;height:20px;pointer-events:none}
+@media(max-height:760px){
+  .data-panel .data-grid{gap:6px;padding:7px}
+  .data-panel .metric{padding:6px 8px}
+  .data-panel .metric .data-label{font-size:13px}
+  .data-panel .metric-value{margin-top:5px}
+}
