@@ -55,6 +55,11 @@ class _RollingWaterDetector(WaterDetector):
             mask = self.roi & (self.phi >= a0) & (self.phi < a1)
             self.sector_masks.append(mask)
             self.sector_counts.append(max(1, int(np.count_nonzero(mask))))
+        # Sector membership is immutable for this calibration; a single
+        # bincount over persistent pixels replaces 24 full-mask scans/frame.
+        self._sector_ids = np.full((self.h, self.w), -1, dtype=np.int16)
+        for k, mask in enumerate(self.sector_masks):
+            self._sector_ids[mask] = k
 
     def process(self, frame: np.ndarray) -> dict:
         gray = self._prep_gray(frame)
@@ -91,9 +96,12 @@ class _RollingWaterDetector(WaterDetector):
         persistent = (persistence >= self.cfg.persistence_threshold) & self.roi
         s_water = float(np.count_nonzero(persistent) / self.roi_count)
 
+        persistent_sectors = self._sector_ids[persistent]
+        sector_hits = np.bincount(persistent_sectors[persistent_sectors >= 0],
+                                  minlength=self.cfg.sector_count)
         sector_scores = [
-            float(np.count_nonzero(persistent & mask) / count)
-            for mask, count in zip(self.sector_masks, self.sector_counts)
+            float(hit / count)
+            for hit, count in zip(sector_hits, self.sector_counts)
         ]
         max_sector_idx = int(np.argmax(sector_scores)) if sector_scores else -1
         max_sector_score = sector_scores[max_sector_idx] if max_sector_idx >= 0 else 0.0
