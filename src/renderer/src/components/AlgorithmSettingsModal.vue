@@ -27,6 +27,9 @@ const draft = reactive<AlgorithmSettings>(copyAlgorithmSettings(props.settings))
 const sourceDraft = reactive<VideoSourceSettings>({ ...props.source })
 const error = computed(() => validateAlgorithmSettings(draft))
 const sourceError = computed(() => {
+  if (sourceDraft.kind === 'file' && !sourceDraft.file_path) {
+    return '请选择视频文件'
+  }
   if (sourceDraft.kind === 'rtsp') {
     if (!/^rtsp:\/\/[^/\s]+/i.test(sourceDraft.rtsp_url)) return '请输入 RTSP 视频地址'
   }
@@ -45,6 +48,11 @@ watch(() => props.settings, next => Object.assign(draft, copyAlgorithmSettings(n
 function defaults(): void {
   Object.assign(draft, DEFAULT_ALGORITHM_SETTINGS)
 }
+async function browseVideo(): Promise<void> {
+  const selected = await window.desktop.system.selectVideoFile()
+  if (selected) sourceDraft.file_path = selected
+}
+
 function sourceDefaults(): void {
   Object.assign(sourceDraft, DEFAULT_VIDEO_SOURCE)
 }
@@ -105,21 +113,26 @@ function saveSource(): void {
             <label><input v-model="sourceDraft.kind" type="radio" value="rtsp" /> RTSP 摄像头</label>
             <label><input v-model="sourceDraft.kind" type="radio" value="usb" /> USB 摄像头</label>
           </div>
-          <div v-if="sourceDraft.kind === 'rtsp'" class="source-field">
+          <div v-if="sourceDraft.kind === 'file'" class="source-field">
+            <label for="source-file-path">视频路径</label>
+            <div class="source-path-row">
+              <input id="source-file-path" :value="sourceDraft.file_path" type="text"
+                readonly placeholder="未选择视频" title="已选择的视频路径" />
+              <button type="button" class="btn btn-muted" :disabled="busy" @click="browseVideo">浏览…</button>
+            </div>
+          </div>
+          <div v-else-if="sourceDraft.kind === 'rtsp'" class="source-field">
             <label for="source-rtsp-url">RTSP 地址</label>
             <input id="source-rtsp-url" v-model.trim="sourceDraft.rtsp_url" type="text" spellcheck="false"
               autocomplete="off" placeholder="rtsp://192.168.1.66:554/..." />
-            <p>连接摄像头后自动检测；地址只保存在本机，不写入设备配置 ZIP。</p>
+
           </div>
           <div v-else-if="sourceDraft.kind === 'usb'" class="source-field">
             <label for="source-usb-index">USB 摄像头编号</label>
             <input id="source-usb-index" v-model.number="sourceDraft.usb_index" type="number" min="0" max="15" step="1" />
-            <p>通常从 0 开始；有多个摄像头时依次尝试 1、2、3。</p>
+
           </div>
-          <div v-else class="source-field">
-            <p>使用本地 MP4、AVI 等视频文件，可拖动进度条、暂停和跳转。</p>
-          </div>
-          <p v-if="sourceDraft.kind !== 'file'" class="source-field-help">RTSP/USB 使用实时画面，不显示播放进度条。摄像头分辨率必须与现有 ROI 标定一致；重新标定时使用实时抓拍。</p>
+
         </div>
         <footer class="algorithm-dialog-foot">
           <button type="button" class="btn btn-muted" :disabled="busy" @click="sourceDefaults">恢复本地视频</button>
@@ -133,7 +146,7 @@ function saveSource(): void {
 
       <div v-else class="algorithm-form">
         <div class="algorithm-scroll source-device-actions">
-          <p>导出或导入本机晶圆标定、参考帧和检测参数。视频源密码不会导出。</p>
+
           <div class="source-device-buttons">
             <button type="button" class="btn btn-muted" :disabled="busy" @click="emit('exportProfile')">导出设备配置 ZIP</button>
             <button type="button" class="btn btn-muted" :disabled="busy" @click="emit('importProfile')">导入设备配置 ZIP</button>
