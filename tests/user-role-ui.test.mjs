@@ -44,3 +44,23 @@ test('administrator password and settings are not stored in frontend localStorag
   assert.match(dialog, /type="password"/)
   assert.match(dialog, /两次输入的密码不一致/)
 })
+
+
+test('only administrators can re-annotate; operators reuse approved calibration for new videos', () => {
+  const stations = read('backend/src/sample_backend/api/stations.py')
+  const stationClient = read('src/renderer/src/services/station-profile.ts')
+  assert.ok(app.includes('v-if="currentRole === \'admin\'" class="btn btn-muted" @click="editCalibration">重新标注'))
+  assert.ok(app.includes('v-if="modalOpen && currentRole === \'admin\'"'))
+  assert.ok(app.includes("if (currentRole.value !== 'admin' || !adminToken.value || modalOpen.value) return"))
+  assert.ok(app.includes("if (!modalOpen.value || currentRole.value !== 'admin' || !adminToken.value) return"))
+  assert.ok(app.includes('readyAutoCalibration'))
+  assert.ok(app.includes('await detection.open(filePath, reused, 0, false, mode)'))
+  assert.ok(app.includes('if (pendingFile.value && !modalOpen.value) openCalibration(false)'))
+  assert.ok(app.includes("if (modalOpen.value) closeCalibration()"))
+  for (const path of ['/calibration', '/reference', '/reference/remove']) {
+    assert.ok(stations.includes("@router.post('" + path + "')"))
+  }
+  assert.equal((stations.match(/user_access\.require_admin\(req\.admin_token\)/g) ?? []).length, 3)
+  assert.ok(stationClient.includes('admin_token: adminToken'))
+  assert.ok(auth.includes('def require_admin(self, token: str | None)'))
+})
