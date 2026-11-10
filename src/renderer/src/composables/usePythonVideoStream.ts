@@ -11,7 +11,7 @@ import { describeVideoOpenError } from '../utils/video-open-error.mjs'
 import type { DetectionResult, WaferCalibration } from '../services/water-detection'
 import type { StageMode } from '../services/station-profile'
 import {
-  openPythonVideo, readPythonVideoFrame, seekPythonVideo,
+  openPythonVideo, readPythonVideoFrame, seekPythonVideo, stopPythonVideo,
   type AnnotatedFrame,
 } from '../services/python-video'
 
@@ -33,6 +33,7 @@ export function usePythonVideoStream() {
   const videoWidth = ref(0)
   const videoHeight = ref(0)
   const isPlaying = ref(false)
+  const hasSession = ref(false)
   let sessionId: string | null = null
   let reachedEnd = false
   let version = 0
@@ -53,6 +54,7 @@ export function usePythonVideoStream() {
     pause()
     version += 1
     sessionId = null
+    hasSession.value = false
     reachedEnd = false
     status.value = 'idle'
     result.value = null
@@ -192,6 +194,7 @@ export function usePythonVideoStream() {
       const session = await request
       if (epoch !== version) return
       sessionId = session.session_id
+      hasSession.value = true
       sourceFrameRate.value = session.fps
       duration.value = session.duration_s
       isLive.value = session.is_live
@@ -208,6 +211,33 @@ export function usePythonVideoStream() {
         failure.kind === 'mismatch' || failure.kind === 'oversize' ? failure.kind : null
       error.value = failure.message
     }
+  }
+
+  async function stop(): Promise<void> {
+    const sid = sessionId
+    pause()
+    version += 1
+    sessionId = null
+    hasSession.value = false
+    reachedEnd = false
+    // Preserve the last preview, elapsed time, source metadata, and CSV
+    // records, but clear the active detection verdict.
+    status.value = 'idle'
+    result.value = null
+    error.value = ''
+    openIssue.value = null
+    actualFrameRate.value = 0
+    measuredStart = 0
+    measuredFrames = 0
+    if (!sid) return
+    const closing = commandChain.then(async () => {
+      if (pendingRead) await pendingRead.catch(() => undefined)
+      await stopPythonVideo(sid)
+    })
+    commandChain = closing.then(() => undefined, () => undefined)
+    // The UI is already stopped. An expired backend session means it has
+    // already been released; do not re-enable detection on that response.
+    await closing.catch(() => undefined)
   }
 
   async function seek(timeS: number, resume = isPlaying.value): Promise<void> {
@@ -268,7 +298,7 @@ export function usePythonVideoStream() {
   return {
     status, result, error, openIssue, records, renderedFrame, sourceFrameRate,
     currentTime, duration, isLive, sourceKind, videoWidth, videoHeight,
-    actualFrameRate, isPlaying,
-    open, seek, play, pause, invalidate, exportCSV,
+    actualFrameRate, isPlaying, hasSession,
+    open, seek, play, pause, stop, invalidate, exportCSV,
   }
 }
