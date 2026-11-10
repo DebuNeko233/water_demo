@@ -28,6 +28,7 @@ export interface DesktopBridge {
   }
   system: {
     selectFile(): Promise<string | null>
+    selectVideoFile(): Promise<string | null>
     chooseProfileArchive(): Promise<string | null>
     saveProfileArchive(): Promise<string | null>
     /** Native path of the user-picked File; Electron 32+ removes File.path. */
