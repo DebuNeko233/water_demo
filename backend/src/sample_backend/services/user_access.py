@@ -131,6 +131,11 @@ class LocalUserAccess:
                 or not hmac.compare_digest(token, self._token)):
             raise AccessDenied(403, 'ADMIN_REQUIRED')
 
+    def require_admin(self, token: str | None) -> None:
+        """Check privileges for station ROI and reference modifications."""
+        with self._lock:
+            self._check(token)
+
     def logout(self, token: str) -> dict:
         with self._lock:
             self._check(token)
