@@ -27,11 +27,13 @@ test('administrator settings use parameter video source and device configuration
   assert.ok(source.includes("'/api/video/source/save'"))
 })
 
-test('live camera monitoring hides seek and timeline but retains pause and image/results', () => {
+test('live camera has no seeking; detection uses explicit start-stop controls', () => {
   assert.match(app, /v-if="!isLiveVideo"[\s\S]*aria-label="视频播放进度"/)
   assert.match(app, /v-else class="playback live-playback"/)
-  assert.match(app, /v-if="!isLiveVideo" class="btn btn-muted" @click="restart"/)
-  assert.match(app, /@click="togglePlay"/)
+  assert.match(app, /@click="startDetection">▶ 开始检测/)
+  assert.match(app, /@click="stopDetection">■ 停止检测/)
+  assert.doesNotMatch(app, /@click="togglePlay"/)
+  assert.doesNotMatch(app, /@click="restart"/)
   assert.match(app, /isLiveVideo\.value \|\| !duration\.value/)
   assert.match(playback, /if \(!sid \|\| isLive\.value\) return/)
   assert.match(playback, /isLive\.value = session\.is_live/)
