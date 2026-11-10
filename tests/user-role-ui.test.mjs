@@ -53,9 +53,9 @@ test('only administrators can re-annotate; operators reuse approved calibration 
   assert.ok(app.includes('v-if="modalOpen && currentRole === \'admin\'"'))
   assert.ok(app.includes("if (currentRole.value !== 'admin' || !adminToken.value || modalOpen.value) return"))
   assert.ok(app.includes("if (!modalOpen.value || currentRole.value !== 'admin' || !adminToken.value) return"))
-  assert.ok(app.includes('readyAutoCalibration'))
-  assert.ok(app.includes('await detection.open(filePath, reused, 0, false, mode)'))
-  assert.ok(app.includes('if (pendingFile.value && !modalOpen.value) openCalibration(false)'))
+  assert.ok(app.includes('const chosen = preferred ?? auto ?? single'))
+  assert.ok(app.includes("await detection.open('', chosen, 0, isLiveVideo.value, mode)"))
+  assert.ok(app.includes('void startConfiguredSource()'))
   assert.ok(app.includes("if (modalOpen.value) closeCalibration()"))
   for (const path of ['/calibration', '/reference', '/reference/remove']) {
     assert.ok(stations.includes("@router.post('" + path + "')"))
