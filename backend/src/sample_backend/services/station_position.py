@@ -32,6 +32,12 @@ class StageCalibrationInput(BaseModel):
     admin_token: str | None = Field(default=None, max_length=128)
 
 
+class StageEnabledInput(BaseModel):
+    stage: str
+    enabled: bool
+    admin_token: str | None = Field(default=None, max_length=128)
+
+
 class SingleCalibrationInput(BaseModel):
     calibration: CalibrationInput
     admin_token: str | None = Field(default=None, max_length=128)
@@ -76,12 +82,14 @@ class ReferencePositionRecognizer:
 
     def __init__(self, samples: dict[str, dict[str, list[np.ndarray]]],
                  threshold: float = .78, margin: float = .035,
-                 spatial_mask: np.ndarray | None = None):
+                 spatial_mask: np.ndarray | None = None,
+                 active_stages: tuple[str, ...] = STAGES):
         self.threshold = threshold
         self.margin = margin
+        self.active_stages = active_stages
         self.references: dict[str, dict[str, list[np.ndarray]]] = {}
         self.masks: dict[str, dict[str, np.ndarray]] = {}
-        for stage in STAGES:
+        for stage in active_stages:
             self.references[stage] = {}
             self.masks[stage] = {}
             for group, frames in samples.get(stage, {}).items():
@@ -102,7 +110,8 @@ class ReferencePositionRecognizer:
 
     @property
     def ready(self) -> bool:
-        return all(bool(self.references.get(s)) for s in STAGES)
+        return len(self.active_stages) >= 2 and all(
+            bool(self.references.get(s)) for s in self.active_stages)
 
     @staticmethod
     def _corr(current: np.ndarray, ref: np.ndarray, weights: np.ndarray) -> float:
@@ -122,7 +131,7 @@ class ReferencePositionRecognizer:
             return "UNKNOWN", 0.0, {}
         descriptor = edge_descriptor(frame)
         scores = {}
-        for stage in STAGES:
+        for stage in self.active_stages:
             # A stage may look different with nozzle A vs nozzle B. Keep
             # robust median voting inside each group, then take the best
             # complete group rather than averaging incompatible appearances.
@@ -150,12 +159,23 @@ class StageProfileStore:
     def _read(self) -> dict:
         if not self.path.exists():
             return {'version': 1, 'stages': {
-                s: {'calibration': None, 'references': []} for s in STAGES}}
+                s: {'enabled': True, 'calibration': None, 'references': []}
+                for s in STAGES}}
         obj = json.loads(self.path.read_text(encoding='utf-8'))
         if obj.get('single_calibration'):
             obj['single_calibration'] = CalibrationInput.model_validate(
                 obj['single_calibration']).model_dump()
+        # Upgrade a device that only used the old standalone ROI without
+        # losing the original coordinates. The new UI then controls P1.
+        if obj.get('single_calibration') and not any(
+                obj['stages'][key]['calibration'] for key in STAGES):
+            obj['stages']['P1']['calibration'] = obj['single_calibration']
+            for key in STAGES:
+                obj['stages'][key]['enabled'] = key == 'P1'
         for s in STAGES:
+            enabled = obj['stages'][s].setdefault('enabled', True)
+            if not isinstance(enabled, bool):
+                raise ValueError('Invalid enabled state for station')
             obj['stages'][s]['calibration'] = (
                 CalibrationInput.model_validate(obj['stages'][s]['calibration']).model_dump()
                 if obj['stages'][s]['calibration'] else None)
@@ -179,26 +199,46 @@ class StageProfileStore:
     def snapshot(self) -> dict:
         with self._lock:
             snapshot = json.loads(json.dumps(self._profile))
+            enabled_stages = [
+                stage for stage in STAGES if snapshot['stages'][stage]['enabled']
+            ]
+            # One enabled station only needs its ROI. Multiple active
+            # stations require reference groups for reliable auto selection.
+            automatic = len(enabled_stages) > 1
             stage_ready = []
             for stage in STAGES:
-                refs = snapshot['stages'][stage]['references']
+                item = snapshot['stages'][stage]
+                refs = item['references']
                 groups = ('nozzle_a', 'nozzle_b') if stage == 'P3' else ('default',)
                 counts = [
                     sum(ref.get('group', 'nozzle_a' if stage == 'P3' else 'default') == group
                         for ref in refs)
                     for group in groups
                 ]
-                # A new optional nozzle group remains disabled until it has
-                # its three samples; prevent a partially configured B bank
-                # from being mistaken for a working automatic P3 detector.
-                stage_ready.append(
-                    snapshot['stages'][stage]['calibration'] is not None
-                    and any(count >= MIN_REFS for count in counts)
+                reference_ready = (
+                    any(count >= MIN_REFS for count in counts)
                     and all(count == 0 or count >= MIN_REFS for count in counts)
                 )
-            snapshot['ready'] = all(stage_ready)
+                item['ready'] = item['calibration'] is not None and (
+                    reference_ready or not automatic)
+                if item['enabled']:
+                    stage_ready.append(item['ready'])
+            snapshot['ready'] = bool(enabled_stages) and all(stage_ready)
+            snapshot['enabled_stages'] = enabled_stages
             snapshot['minimum_references'] = MIN_REFS
             return snapshot
+
+    def set_enabled(self, req: StageEnabledInput) -> dict:
+        stage = self._stage(req.stage)
+        with self._lock:
+            before = self._profile['stages'][stage]['enabled']
+            self._profile['stages'][stage]['enabled'] = req.enabled
+            try:
+                self._save()
+            except Exception:
+                self._profile['stages'][stage]['enabled'] = before
+                raise
+            return self.snapshot()
 
     def save_single(self, calibration: CalibrationInput) -> dict:
         """Persist the operator's approved single-station ROI across restarts."""
@@ -238,7 +278,7 @@ class StageProfileStore:
                 max(2.0, previous['radius'] * .03)
                 or abs(previous['radius'] - calibration['radius']) >
                 max(2.0, previous['radius'] * .03))
-            new = {'calibration': calibration,
+            new = {'enabled': old['enabled'], 'calibration': calibration,
                    'references': [] if clear else list(old['references'])}
             self._profile['stages'][stage] = new
             try:
@@ -355,20 +395,27 @@ class StageProfileStore:
             (self.root / (req.reference_id + '.png')).unlink(missing_ok=True)
             return self.snapshot()
 
-    def build(self, width: int, height: int) -> tuple[dict, ReferencePositionRecognizer]:
+    def build(self, width: int, height: int
+              ) -> tuple[dict, ReferencePositionRecognizer | None]:
+        """Build only enabled stations; one needs ROI, several need matching."""
         with self._lock:
             snap = self.snapshot()
+            active = tuple(snap['enabled_stages'])
+            if not active:
+                raise InvalidFrame('请至少启用一个工位')
             if not snap['ready']:
-                raise InvalidFrame('三个工位均须标注 ROI 且每个至少提供 3 张同组参考帧')
-            samples: dict[str, dict[str, list[np.ndarray]]] = {}
-            for stage in STAGES:
+                raise InvalidFrame('请完成已启用工位的 ROI 与参考帧')
+            for stage in active:
                 cal = snap['stages'][stage]['calibration']
                 if (cal['width'], cal['height']) != (width, height):
                     raise InvalidFrame('标定分辨率与当前视频不一致，请重新标定')
+            if len(active) == 1:
+                return snap, None
+
+            samples: dict[str, dict[str, list[np.ndarray]]] = {}
+            for stage in active:
                 samples[stage] = {}
                 for ref in snap['stages'][stage]['references']:
-                    # imdecode accepts Windows userData paths containing
-                    # non-ASCII account names (cv2.imread may not).
                     reference_file = self.root / (ref['id'] + '.png')
                     try:
                         raw = np.frombuffer(reference_file.read_bytes(), dtype=np.uint8)
@@ -379,18 +426,18 @@ class StageProfileStore:
                         raise InvalidFrame('参考截图丢失或分辨率错误，请重新采集')
                     group = ref.get('group', 'nozzle_a' if stage == 'P3' else 'default')
                     samples[stage].setdefault(group, []).append(frame)
-            # The wafer may appear at any of three positions; compare its
-            # edge structure across those areas, not the static chamber walls.
+
             yy, xx = np.ogrid[:96, :128]
             spatial = np.zeros((96, 128), dtype=np.float32)
-            for stage in STAGES:
+            for stage in active:
                 cal = snap['stages'][stage]['calibration']
                 x = cal['cx'] * 128.0 / width
                 y = cal['cy'] * 96.0 / height
                 rx = max(2., cal['radius'] * 1.15 * 128.0 / width)
                 ry = max(2., cal['radius'] * 1.15 * 96.0 / height)
                 spatial[((xx - x) / rx) ** 2 + ((yy - y) / ry) ** 2 <= 1.] = 1.
-            model = ReferencePositionRecognizer(samples, spatial_mask=spatial)
+            model = ReferencePositionRecognizer(
+                samples, spatial_mask=spatial, active_stages=active)
             if not model.ready:
                 raise InvalidFrame('参考帧模型未就绪')
             return snap, model
