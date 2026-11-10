@@ -308,7 +308,7 @@ class PythonVideoStream:
                     break
                 if packet is not None:
                     sample = dict(packet['result'])
-                    sample.pop('history', None)  # Only current frame needs chart.
+                    sample['history'] = []  # Only current frame needs chart.
                     intermediate.append(sample)
                 packet = candidate
                 cost = candidate['performance']
