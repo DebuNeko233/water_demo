@@ -238,3 +238,82 @@ def test_rtsp_stream_uses_saved_admin_url_and_first_frame_dimensions(monkeypatch
         assert payload['frame']['frame_index'] == 0
         assert captured == [1]
         assert 'secret' not in str(client.get('/api/video/source').json())
+
+
+def test_configured_local_file_is_persistent_and_operator_cannot_override(monkeypatch, tmp_path):
+    """Operator playback must use the file selected by the administrator."""
+    import base64
+
+    monkeypatch.setenv('APP_DATA_DIR', str(tmp_path / 'data'))
+
+    def write_video(path, count):
+        writer = cv2.VideoWriter(str(path),
+                                 cv2.VideoWriter_fourcc(*'MJPG'), 20, (96, 96))
+        assert writer.isOpened()
+        for idx in range(count):
+            frame = np.full((96, 96, 3), min(255, idx * 9 + 20), np.uint8)
+            writer.write(frame)
+        writer.release()
+
+    selected = tmp_path / 'saved source.avi'
+    ignored = tmp_path / 'override.avi'
+    write_video(selected, 50)
+    write_video(ignored, 8)
+
+    with TestClient(create_app()) as client:
+        token = admin(client)
+        unauthorized = client.post('/api/video/source/save', json={
+            'admin_token': 'bad', 'source': {'kind': 'file', 'file_path': str(selected)},
+        })
+        assert unauthorized.status_code == 403
+        saved = client.post('/api/video/source/save', json={
+            'admin_token': token, 'source': {'kind': 'file', 'file_path': str(selected)},
+        })
+        assert saved.status_code == 200, saved.text
+        assert saved.json()['source']['file_path'] == str(selected)
+        assert 'file_path' not in client.get('/api/video/source').json()
+        assert client.post('/api/video/snapshot', json={
+            'admin_token': 'not-an-admin', 'time_s': 1.2,
+        }).status_code == 403
+        preview = client.post('/api/video/snapshot', json={
+            'admin_token': token, 'time_s': 1.2,
+        })
+        assert preview.status_code == 200, preview.text
+        info = preview.json()
+        assert info['width'] == 96 and info['height'] == 96
+        assert abs(info['duration_s'] - 2.5) < 0.1
+        assert abs(info['time_s'] - 1.2) <= .05
+        image = cv2.imdecode(np.frombuffer(base64.b64decode(info['jpeg_base64']),
+                                            dtype=np.uint8), cv2.IMREAD_COLOR)
+        assert image is not None and image.shape == (96, 96, 3)
+
+        # Even a syntactically valid operator-supplied path is ignored once
+        # the administrator has saved a different local source.
+        opened = client.post('/api/video/open', json={
+            'file_path': str(ignored),
+            'calibration': {'cx': 48, 'cy': 48, 'radius': 29,
+                            'width': 96, 'height': 96},
+        })
+        assert opened.status_code == 200, opened.text
+        assert opened.json()['frame_count'] == 50
+        assert opened.json()['source_kind'] == 'file'
+        assert opened.json()['is_live'] is False
+
+        bad_path = client.post('/api/video/source/save', json={
+            'admin_token': token,
+            'source': {'kind': 'file', 'file_path': str(tmp_path / 'missing.mp4')},
+        })
+        assert bad_path.status_code == 422
+        assert client.post('/api/video/source/config', json={
+            'admin_token': token,
+        }).json()['file_path'] == str(selected)
+
+    # A new desktop session still uses the configured video without another picker.
+    with TestClient(create_app()) as reopened:
+        assert reopened.app.state.video_source.current().file_path == str(selected)
+        opened = reopened.post('/api/video/open', json={
+            'calibration': {'cx': 48, 'cy': 48, 'radius': 29,
+                            'width': 96, 'height': 96},
+        })
+        assert opened.status_code == 200, opened.text
+        assert opened.json()['frame_count'] == 50
