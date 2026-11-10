@@ -107,6 +107,7 @@ const videoHeight = detection.videoHeight
 const isPlaying = detection.isPlaying
 const isLiveVideo = computed(() => videoSource.value.kind !== 'file')
 const videoError = detection.error
+const videoOpenIssue = detection.openIssue
 const message = ref('')
 let previouslyPlaying = false
 let resumeAt = 0
@@ -302,6 +303,10 @@ async function startConfiguredSource(): Promise<void> {
   screen.value = 'monitor'
   seekDraft.value = null
   await detection.open('', chosen, 0, isLiveVideo.value, mode)
+  if (videoOpenIssue.value === 'mismatch' && currentRole.value === 'admin' &&
+      adminToken.value && !modalOpen.value) {
+    openCalibration(false)
+  }
 }
 
 async function refreshCalibrationSnapshot(timeS = calibrationTime.value): Promise<void> {
@@ -318,7 +323,14 @@ async function refreshCalibrationSnapshot(timeS = calibrationTime.value): Promis
     calibrationDuration.value = frame.duration_s
     calibrationTime.value = frame.time_s
     calibrationFrameReady.value = true
-    if (stationMode.value === 'auto') selectStation(selectedStation.value)
+    if (stationMode.value === 'auto') {
+      selectStation(selectedStation.value)
+    } else if (calibration.value &&
+        (frame.width !== calibration.value.width ||
+         frame.height !== calibration.value.height)) {
+      // Never reuse a center/radius measured in a different pixel grid.
+      resetDraft()
+    }
   } catch {
     if (request === calibrationSnapshotVersion) stationError.value = '视频画面读取失败'
   } finally {
@@ -371,7 +383,9 @@ function chooseStationMode(mode: StageMode): void {
     void refreshStationProfile()
   } else {
     resetDraft()
-    if (calibration.value) {
+    if (calibration.value &&
+        (!draftWidth.value || (calibration.value.width === draftWidth.value &&
+         calibration.value.height === draftHeight.value))) {
       center.value = { x: calibration.value.cx, y: calibration.value.cy }
       radius.value = calibration.value.radius
     }
@@ -718,7 +732,11 @@ async function authorizeAdministrator(password: string): Promise<void> {
     adminDialogOpen.value = false
     notify('已切换到管理员')
     void refreshAdminVideoSource()
-    if (!calibration.value && !modalOpen.value) void refreshStationProfile()
+    if (videoOpenIssue.value === 'mismatch' && !modalOpen.value) {
+      openCalibration(false)
+    } else if (!calibration.value && !modalOpen.value) {
+      void refreshStationProfile()
+    }
   } catch (reason) {
     adminError.value = userErrorText(reason)
     if (String(reason).includes('ADMIN_ALREADY_CONFIGURED')) {
@@ -881,8 +899,18 @@ onBeforeUnmount(() => {
             <div v-if="videoError" class="video-error">
               <div class="video-error-message">{{ videoError }}</div>
               <div class="video-error-actions">
-                <button class="btn btn-primary" type="button" @click="retryPythonVideo">重试连接</button>
-                <button class="btn btn-muted" type="button" @click="openPythonStartupLogs">查看启动日志</button>
+                <template v-if="videoOpenIssue === 'mismatch'">
+                  <button v-if="currentRole === 'admin'" class="btn btn-primary" type="button" @click="openCalibration(false)">重新标注</button>
+                  <button v-else class="btn btn-primary" type="button" @click="switchUser">切换管理员</button>
+                </template>
+                <template v-else-if="videoOpenIssue === 'oversize'">
+                  <button v-if="currentRole === 'admin'" class="btn btn-primary" type="button" @click="openAlgorithmSettings">视频源设置</button>
+                  <button v-else class="btn btn-primary" type="button" @click="switchUser">切换管理员</button>
+                </template>
+                <template v-else>
+                  <button class="btn btn-primary" type="button" @click="retryPythonVideo">重试连接</button>
+                  <button class="btn btn-muted" type="button" @click="openPythonStartupLogs">查看启动日志</button>
+                </template>
               </div>
             </div>
           </div>
