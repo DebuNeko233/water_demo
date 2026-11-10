@@ -19,6 +19,7 @@ export interface AnnotatedFrame {
   time_s?: number
   jpeg_base64?: string
   result?: DetectionResult
+  detecting?: boolean
 }
 export interface VideoStreamSession {
   session_id: string
@@ -30,17 +31,19 @@ export interface VideoStreamSession {
   stage_mode: StageMode
   is_live: boolean
   source_kind: 'file' | 'rtsp' | 'usb'
+  detecting: boolean
   frame: AnnotatedFrame
 }
 export function openPythonVideo(
   filePath: string, calibration: WaferCalibration, timeS: number,
-  stageMode: StageMode = 'single',
+  stageMode: StageMode = 'single', detecting = true,
 ): Promise<VideoStreamSession> {
   return window.desktop.backend.request<VideoStreamSession>('POST', '/api/video/open', {
     file_path: filePath,
     calibration: toPlainCalibration(calibration),
     start_time_s: timeS,
     stage_mode: stageMode,
+    detecting,
     // No client-specified detector configuration. Python resolves the
     // last administrator-approved settings for every operator session.
   })
@@ -50,6 +53,13 @@ export function readPythonVideoFrame(sessionId: string, batchFrames = 1): Promis
     session_id: sessionId, batch_frames: batchFrames,
   })
 }
+export function setPythonDetection(sessionId: string, enabled: boolean): Promise<{ detecting: boolean }> {
+  return window.desktop.backend.request<{ detecting: boolean }>(
+    'POST', enabled ? '/api/video/detection/start' : '/api/video/detection/stop',
+    { session_id: sessionId },
+  )
+}
+
 export function stopPythonVideo(sessionId: string): Promise<{ stopped: boolean }> {
   return window.desktop.backend.request<{ stopped: boolean }>('POST', '/api/video/stop', {
     session_id: sessionId,
