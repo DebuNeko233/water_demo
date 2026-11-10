@@ -32,8 +32,9 @@ test('seek and pause keep frame cursor, and camera display still has no timeline
   assert.ok(app.includes('v-if="!isLiveVideo"'))
 })
 
-test('measured FPS and stage timings are visible without adding settings clutter', () => {
-  assert.ok(app.includes('actualFrameRate.toFixed(1)'))
+test('video footer shows source FPS only; detailed measured timing stays in logs', () => {
+  assert.ok(app.includes('analysisFPS.toFixed(2)'))
+  assert.ok(!app.includes('actualFrameRate.toFixed(1)'))
   assert.ok(playback.includes('VideoPerformance'))
   assert.ok(playback.includes('analysis_ms='))
   assert.ok(playback.includes('decode_ms='))
