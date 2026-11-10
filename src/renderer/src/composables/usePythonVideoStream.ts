@@ -25,6 +25,7 @@ export function usePythonVideoStream() {
   const records = ref<DetectionResult[]>([])
   const renderedFrame = ref('')
   const sourceFrameRate = ref(0)
+  const actualFrameRate = ref(0)
   const currentTime = ref(0)
   const duration = ref(0)
   const isLive = ref(false)
@@ -38,6 +39,9 @@ export function usePythonVideoStream() {
   let timer: ReturnType<typeof setTimeout> | null = null
   let pendingRead: Promise<AnnotatedFrame> | null = null
   let commandChain: Promise<void> = Promise.resolve()
+  let measuredStart = 0
+  let measuredFrames = 0
+  let lastPerformanceLog = 0
 
   function pause(): void {
     isPlaying.value = false
@@ -56,6 +60,10 @@ export function usePythonVideoStream() {
     isLive.value = false
     sourceKind.value = 'file'
     renderedFrame.value = ''
+    actualFrameRate.value = 0
+    measuredStart = 0
+    measuredFrames = 0
+    lastPerformanceLog = 0
     error.value = ''
     openIssue.value = null
   }
@@ -74,17 +82,49 @@ export function usePythonVideoStream() {
     renderedFrame.value = uri
     result.value = packet.result
     currentTime.value = packet.time_s
+    if (packet.samples?.length) records.value.push(...packet.samples)
     records.value.push(packet.result)
     if (isLive.value && records.value.length > 3000) records.value.splice(0, 1000)
     status.value = packet.result.history_ready ? 'running' : 'warming'
     error.value = ''
   }
 
-  function displayFrameRate(): number {
-    // A camera still analyzes every source frame in Python. Only the UI
-    // preview is limited to 20 FPS to avoid oversized IPC/JPEG/DOM churn.
-    const fps = sourceFrameRate.value
-    return Math.max(1, isLive.value ? Math.min(20, fps) : fps)
+  function displayBatchSize(): number {
+    if (isLive.value) return 1
+    const largeFrame = videoWidth.value * videoHeight.value >= 1280 * 720
+    const targetDisplayFPS = largeFrame ? 15 : 24
+    // CPU still analyzes every source frame and every result is exported.
+    // A 1080p/30 video sends 15 JPEGs/second rather than 30 JPEGs/second.
+    return Math.max(1, Math.min(6,
+      Math.ceil(sourceFrameRate.value / targetDisplayFPS)))
+  }
+
+  function displayFrameInterval(): number {
+    if (isLive.value) return 1000 / Math.max(1, Math.min(20, sourceFrameRate.value))
+    return 1000 * displayBatchSize() / Math.max(1, sourceFrameRate.value)
+  }
+
+  function measureThroughput(packet: AnnotatedFrame, elapsedMs: number): void {
+    const now = performance.now()
+    if (!measuredStart) measuredStart = now
+    measuredFrames += isLive.value ? 1 : (packet.performance?.frames ?? 1)
+    if (now - measuredStart >= 1800) {
+      actualFrameRate.value = Math.round(
+        10 * measuredFrames * 1000 / (now - measuredStart)) / 10
+      measuredStart = now
+      measuredFrames = 0
+    }
+    if (now - lastPerformanceLog >= 5000 && packet.performance) {
+      lastPerformanceLog = now
+      const perf = packet.performance
+      // One log per five seconds, not per frame. Helps pinpoint CPU vs IPC.
+      void window.desktop.logging.write('info', 'VideoPerformance',
+        `source=${sourceKind.value} size=${videoWidth.value}x${videoHeight.value} ` +
+        `source_fps=${sourceFrameRate.value} effective_fps=${actualFrameRate.value} ` +
+        `decode_ms=${perf.decode_ms} analysis_ms=${perf.analysis_ms} ` +
+        `preview_ms=${perf.preview_ms} total_request_ms=${elapsedMs.toFixed(1)}`
+      ).catch(() => undefined)
+    }
   }
 
   function play(): void {
@@ -94,7 +134,7 @@ export function usePythonVideoStream() {
       return
     }
     isPlaying.value = true
-    schedule(version, 1000 / displayFrameRate())
+    schedule(version, displayFrameInterval())
   }
 
   function schedule(expectedVersion: number, delayMs: number): void {
@@ -109,7 +149,7 @@ export function usePythonVideoStream() {
     const sid = sessionId
     if (!isPlaying.value || !sid || expectedVersion !== version) return
     const started = performance.now()
-    const reading = readPythonVideoFrame(sid)
+    const reading = readPythonVideoFrame(sid, displayBatchSize())
     pendingRead = reading
     try {
       const packet = await reading
@@ -121,7 +161,9 @@ export function usePythonVideoStream() {
         return
       }
       await showFrame(packet, expectedVersion)
-      schedule(expectedVersion, 1000 / displayFrameRate() - (performance.now() - started))
+      if (expectedVersion !== version || !isPlaying.value) return
+      measureThroughput(packet, performance.now() - started)
+      schedule(expectedVersion, displayFrameInterval() - (performance.now() - started))
     } catch (reason) {
       if (version !== expectedVersion) return
       pause()
@@ -186,6 +228,9 @@ export function usePythonVideoStream() {
       if (epoch !== version) return
       result.value = null
       records.value = []
+      actualFrameRate.value = 0
+      measuredStart = 0
+      measuredFrames = 0
       await showFrame(packet, epoch)
       if (epoch === version && resume) play()
     } catch (reason) {
@@ -222,7 +267,8 @@ export function usePythonVideoStream() {
   onBeforeUnmount(invalidate)
   return {
     status, result, error, openIssue, records, renderedFrame, sourceFrameRate,
-    currentTime, duration, isLive, sourceKind, videoWidth, videoHeight, isPlaying,
+    currentTime, duration, isLive, sourceKind, videoWidth, videoHeight,
+    actualFrameRate, isPlaying,
     open, seek, play, pause, invalidate, exportCSV,
   }
 }
