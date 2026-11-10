@@ -459,6 +459,7 @@ async function exportDeviceProfile(): Promise<void> {
     notify('设备配置已导出（' + saved.reference_count + ' 张参考帧）')
   } catch (error) {
     stationError.value = '导出失败：' + String(error)
+    if (algorithmSettingsOpen.value) notify('设备配置导出失败，请检查 ZIP 保存位置')
     if (String(error).includes('ADMIN_REQUIRED')) resetToOperator()
   } finally {
     archiveBusy.value = false
@@ -485,6 +486,7 @@ async function importDeviceProfile(): Promise<void> {
     notify('设备配置已导入（' + imported.reference_count + ' 张参考帧），请确认后重新检测')
   } catch (error) {
     stationError.value = '导入失败，原配置已保留：' + String(error)
+    if (algorithmSettingsOpen.value) notify('设备配置导入失败，原配置已保留')
     if (String(error).includes('ADMIN_REQUIRED')) resetToOperator()
   } finally {
     archiveBusy.value = false
