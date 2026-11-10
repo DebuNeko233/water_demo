@@ -317,3 +317,97 @@ def test_configured_local_file_is_persistent_and_operator_cannot_override(monkey
         })
         assert opened.status_code == 200, opened.text
         assert opened.json()['frame_count'] == 50
+
+
+
+def test_live_stream_skips_unrequested_jpegs(monkeypatch, tmp_path):
+    """Realtime recognition runs while display is paused, without JPEG churn."""
+    import time
+
+    monkeypatch.setenv('APP_DATA_DIR', str(tmp_path / 'data'))
+    camera = FakeCamera()
+    monkeypatch.setattr(video_stream, 'open_capture',
+                        lambda source, file_path='': camera)
+    original_encode = cv2.imencode
+    jpeg_count = 0
+
+    def count_jpegs(extension, image, *args):
+        nonlocal jpeg_count
+        if extension == '.jpg':
+            jpeg_count += 1
+        return original_encode(extension, image, *args)
+
+    monkeypatch.setattr(video_stream.cv2, 'imencode', count_jpegs)
+    with TestClient(create_app()) as client:
+        token = admin(client)
+        assert client.post('/api/video/source/save', json={
+            'admin_token': token, 'source': {'kind': 'usb', 'usb_index': 0},
+        }).status_code == 200
+        opened = client.post('/api/video/open', json={
+            'calibration': {'cx': 48, 'cy': 48, 'radius': 30, 'width': 96, 'height': 96},
+        })
+        assert opened.status_code == 200, opened.text
+        assert jpeg_count == 1  # First monitored frame is displayed.
+
+        deadline = time.monotonic() + 2.0
+        while camera.frames < 5 and time.monotonic() < deadline:
+            time.sleep(.03)
+        assert camera.frames >= 5
+        # Background inference must keep running, but unused previews are
+        # no longer rendered or encoded on every camera frame.
+        assert jpeg_count == 1
+
+        packet = client.post('/api/video/next', json={
+            'session_id': opened.json()['session_id'],
+        })
+        assert packet.status_code == 200, packet.text
+        assert packet.json()['jpeg_base64']
+        assert packet.json()['frame_index'] >= 4
+        assert jpeg_count == 2
+        before = camera.frames
+        time.sleep(.12)
+        assert camera.frames > before
+        assert jpeg_count == 2
+
+
+def test_hd_source_keeps_native_dimensions_with_small_display_jpeg(monkeypatch, tmp_path):
+    """Only presentation pixels shrink; ROI and reported source size stay HD."""
+    import base64
+    monkeypatch.setenv('APP_DATA_DIR', str(tmp_path / 'data'))
+
+    class HdCamera(FakeCamera):
+        def read(self):
+            if not self.opened:
+                return False, None
+            self.frames += 1
+            frame = np.full((1080, 1920, 3), 90, dtype=np.uint8)
+            cv2.circle(frame, (950, 530), 135, (210, 210, 210), 2)
+            return True, frame
+
+        def get(self, prop):
+            if prop == cv2.CAP_PROP_FRAME_WIDTH:
+                return 1920
+            if prop == cv2.CAP_PROP_FRAME_HEIGHT:
+                return 1080
+            return super().get(prop)
+
+    monkeypatch.setattr(video_stream, 'open_capture',
+                        lambda source, file_path='': HdCamera())
+    with TestClient(create_app()) as client:
+        token = admin(client)
+        client.post('/api/video/source/save', json={
+            'admin_token': token, 'source': {'kind': 'usb', 'usb_index': 0},
+        })
+        opened = client.post('/api/video/open', json={
+            'calibration': {'cx': 950, 'cy': 530, 'radius': 150,
+                            'width': 1920, 'height': 1080},
+        })
+        assert opened.status_code == 200, opened.text
+        info = opened.json()
+        assert (info['width'], info['height']) == (1920, 1080)
+        jpg = base64.b64decode(info['frame']['jpeg_base64'])
+        display = cv2.imdecode(np.frombuffer(jpg, dtype=np.uint8),
+                               cv2.IMREAD_COLOR)
+        assert display.shape[:2] == (540, 960)
+        # Even the first frame's ROI metrics were computed in source pixels.
+        assert info['frame']['result']['history_ready'] is False
