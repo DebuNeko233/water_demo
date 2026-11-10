@@ -5,7 +5,7 @@ import { svgSourceToClient } from './utils/svgCoordinates.mjs'
 import { calibrationPointerToSource } from './utils/calibrationPointer.mjs'
 import { usePythonVideoStream } from './composables/usePythonVideoStream'
 import {
-  STAGES, getStationProfile, saveStationCalibration, saveSingleCalibration,
+  STAGES, getStationProfile, saveStationCalibration, setStationEnabled,
   captureStationReference, removeStationReference, captureLiveStationReference,
   exportStationArchive, importStationArchive,
   type StageKey, type StageMode, type StationProfile, type ReferenceGroup,
@@ -88,7 +88,7 @@ const monitorBox = ref({ width: 0, height: 0 })
 const modalOpen = ref(false)
 const activeName = ref('')
 const calibration = ref<Calibration | null>(null)
-const stationMode = ref<StageMode>('single')
+const stationMode = ref<StageMode>('configured')
 const selectedStation = ref<StageKey>('P1')
 const selectedP3Nozzle = ref<'nozzle_a' | 'nozzle_b'>('nozzle_a')
 const stationProfile = ref<StationProfile | null>(null)
@@ -127,22 +127,9 @@ const draftCalibration = computed<Calibration | null>(() =>
     ? { cx: center.value.x, cy: center.value.y, radius: radius.value, width: draftWidth.value, height: draftHeight.value }
     : null,
 )
+const enabledStageCount = computed(() => stationProfile.value?.enabled_stages.length ?? 0)
 const readyToConfirm = computed(() =>
-  stationMode.value === 'auto'
-    ? !!stationProfile.value?.ready && !stationBusy.value && !!draftCalibration.value &&
-      STAGES.every(s => {
-        const saved = stationProfile.value?.stages[s].calibration
-        return saved?.width === draftWidth.value && saved?.height === draftHeight.value
-      }) &&
-      (() => {
-        const saved = stationProfile.value?.stages[selectedStation.value].calibration
-        const draft = draftCalibration.value
-        return !!saved && !!draft &&
-          Math.abs(saved.cx - draft.cx) < 0.01 &&
-          Math.abs(saved.cy - draft.cy) < 0.01 &&
-          Math.abs(saved.radius - draft.radius) < 0.01
-      })()
-    : !!draftCalibration.value,
+  !!draftCalibration.value && enabledStageCount.value > 0 && !stationBusy.value,
 )
 const selectedStageConfig = computed(() => stationProfile.value?.stages[selectedStation.value])
 const currentStageReferences = computed(() => (selectedStageConfig.value?.references ?? []).filter(refItem =>
@@ -286,28 +273,25 @@ async function refreshAdminVideoSource(): Promise<void> {
 
 async function startConfiguredSource(detectOnOpen = false): Promise<void> {
   if (!stationProfile.value) await refreshStationProfile()
-  const auto = stationProfile.value?.ready
-    ? stationProfile.value.stages.P1.calibration : null
-  const single = stationProfile.value?.single_calibration ?? null
-  const preferred = stationMode.value === 'auto' ? auto : (calibration.value ?? single)
-  const chosen = preferred ?? auto ?? single
-  if (!chosen) {
+  const profile = stationProfile.value
+  const firstEnabled = profile?.enabled_stages[0]
+  const chosen = firstEnabled ? profile.stages[firstEnabled].calibration : null
+  if (!chosen || !profile?.ready) {
     if (currentRole.value === 'admin' && adminToken.value) {
       openCalibration(false)
     } else {
-      notify('请切换管理员完成晶圆标注')
+      notify('请切换管理员完成已启用工位的 ROI 与参考帧')
     }
     return
   }
-  const mode: StageMode = preferred ? stationMode.value : (auto ? 'auto' : 'single')
-  stationMode.value = mode
+  stationMode.value = 'configured'
   calibration.value = chosen
   activeName.value = sourceLabel.value
   videoWidth.value = chosen.width
   videoHeight.value = chosen.height
   screen.value = 'monitor'
   seekDraft.value = null
-  await detection.open('', chosen, 0, true, mode, detectOnOpen)
+  await detection.open('', chosen, 0, true, 'configured', detectOnOpen)
   if (videoOpenIssue.value === 'mismatch' && currentRole.value === 'admin' &&
       adminToken.value && !modalOpen.value) {
     openCalibration(false)
@@ -328,14 +312,7 @@ async function refreshCalibrationSnapshot(timeS = calibrationTime.value): Promis
     calibrationDuration.value = frame.duration_s
     calibrationTime.value = frame.time_s
     calibrationFrameReady.value = true
-    if (stationMode.value === 'auto') {
-      selectStation(selectedStation.value)
-    } else if (calibration.value &&
-        (frame.width !== calibration.value.width ||
-         frame.height !== calibration.value.height)) {
-      // Never reuse a center/radius measured in a different pixel grid.
-      resetDraft()
-    }
+    selectStation(selectedStation.value)
   } catch {
     if (request === calibrationSnapshotVersion) stationError.value = '视频画面读取失败'
   } finally {
@@ -364,36 +341,53 @@ async function refreshStationProfile(): Promise<void> {
   try {
     const profile = await getStationProfile()
     stationProfile.value = profile
-    if (!calibration.value && profile.single_calibration) {
-      calibration.value = profile.single_calibration
+    const firstEnabled = profile.enabled_stages[0]
+    if (firstEnabled && !calibration.value) {
+      calibration.value = profile.stages[firstEnabled].calibration
     }
     if (!stationProfileInitialized) {
       stationProfileInitialized = true
-      const hasReferences = STAGES.some(s => profile.stages[s].references.length > 0)
-      if (!modalOpen.value || hasReferences) stationMode.value = hasReferences ? 'auto' : 'single'
+      if (firstEnabled) selectedStation.value = firstEnabled
     }
-    if (modalOpen.value && stationMode.value === 'auto' &&
-        !center.value && radius.value === null) {
+    if (modalOpen.value && !center.value && radius.value === null) {
       selectStation(selectedStation.value)
     }
   } catch (error) {
     stationError.value = '无法读取工位配置：' + String(error)
   }
 }
-function chooseStationMode(mode: StageMode): void {
-  if (currentRole.value !== 'admin' || !adminToken.value) return
-  stationMode.value = mode
-  if (mode === 'auto') {
-    selectStation(selectedStation.value)
-    void refreshStationProfile()
-  } else {
-    resetDraft()
-    if (calibration.value &&
-        (!draftWidth.value || (calibration.value.width === draftWidth.value &&
-         calibration.value.height === draftHeight.value))) {
-      center.value = { x: calibration.value.cx, y: calibration.value.cy }
-      radius.value = calibration.value.radius
-    }
+async function toggleStationEnabled(stage: StageKey): Promise<void> {
+  if (currentRole.value !== 'admin' || !adminToken.value ||
+      stationBusy.value || archiveBusy.value || !stationProfile.value) return
+  stationBusy.value = true
+  stationError.value = ''
+  try {
+    const enabled = !stationProfile.value.stages[stage].enabled
+    stationProfile.value = await setStationEnabled(stage, enabled, adminToken.value)
+    // The backend invalidates its previous source to prevent using a
+    // disabled ROI. Next opening always resolves the new enabled subset.
+    detection.invalidate()
+    calibration.value = null
+    if (enabled && !center.value && radius.value === null) selectStation(stage)
+  } catch {
+    stationError.value = '工位启用状态保存失败'
+  } finally {
+    stationBusy.value = false
+  }
+}
+async function saveCurrentRoi(): Promise<void> {
+  if (currentRole.value !== 'admin' || !adminToken.value || stationBusy.value ||
+      !draftCalibration.value) return
+  stationBusy.value = true
+  stationError.value = ''
+  try {
+    stationProfile.value = await saveStationCalibration(
+      selectedStation.value, draftCalibration.value, adminToken.value)
+    notify(selectedStation.value + ' ROI 已保存')
+  } catch {
+    stationError.value = '工位 ROI 保存失败'
+  } finally {
+    stationBusy.value = false
   }
 }
 async function exportDeviceProfile(): Promise<void> {
@@ -427,10 +421,10 @@ async function importDeviceProfile(): Promise<void> {
     stationProfile.value = imported.profile
     algorithmSettings.value = copyAlgorithmSettings(imported.settings)
     stationProfileInitialized = true
-    stationMode.value = imported.profile.ready ? 'auto' : 'single'
-    calibration.value = imported.profile.single_calibration
-      ?? imported.profile.stages.P1.calibration ?? null
-    selectStation('P1')
+    stationMode.value = 'configured'
+    const firstEnabled = imported.profile.enabled_stages[0] ?? 'P1'
+    calibration.value = imported.profile.stages[firstEnabled].calibration
+    selectStation(firstEnabled)
     notify('设备配置已导入（' + imported.reference_count + ' 张参考帧），请确认后重新检测')
   } catch (error) {
     stationError.value = '导入失败，原配置已保留：' + String(error)
@@ -493,14 +487,10 @@ function openCalibration(existing: boolean): void {
   calibrationDuration.value = 0
   calibrationTime.value = 0
   calibrationFrameReady.value = false
-  if (existing && calibration.value) {
-    center.value = { x: calibration.value.cx, y: calibration.value.cy }
-    radius.value = calibration.value.radius
-  }
+  selectStation(selectedStation.value)
   modalOpen.value = true
   stationError.value = ''
   void refreshStationProfile()
-  if (stationMode.value === 'auto') selectStation(selectedStation.value)
   void nextTick(() => refreshCalibrationSnapshot(
     existing && !isLiveVideo.value ? resumeAt : 0,
   ))
