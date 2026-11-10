@@ -35,7 +35,7 @@ test('live camera monitoring hides seek and timeline but retains pause and image
   assert.match(app, /isLiveVideo\.value \|\| !duration\.value/)
   assert.match(playback, /if \(!sid \|\| isLive\.value\) return/)
   assert.match(playback, /isLive\.value = session\.is_live/)
-  assert.match(backend, /if self\._source_kind != 'file':\n            raise InvalidFrame/ )
+  assert.match(backend, /if self\._source_kind != 'file':\r?\n            raise InvalidFrame/)
   assert.match(backend, /def _live_loop/)
   assert.match(backend, /self\._next_locked\(\)/)
 })
