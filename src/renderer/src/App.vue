@@ -72,6 +72,7 @@ const detectorStatus = detection.status
 const detectorError = detection.error
 const detectionRecords = detection.records
 const analysisFPS = detection.sourceFrameRate
+const actualFrameRate = detection.actualFrameRate
 const calibrationStage = ref<HTMLElement | null>(null)
 const calibrationImage = ref<HTMLImageElement | null>(null)
 const calibrationSvg = ref<SVGSVGElement | null>(null)
@@ -929,7 +930,7 @@ onBeforeUnmount(() => {
           <section class="panel chart-panel"><div class="panel-heading"><span class="panel-title">S_water 历史曲线</span><span class="chart-legend"><i/> S_water　 <b>┄</b> NG 阈值</span></div><div class="chart-body"><svg viewBox="0 0 520 140" preserveAspectRatio="none" role="img" aria-label="实时水流异常检测历史曲线"><path d="M50 18H510 M50 66H510 M50 115H510" class="chart-grid"/><path :d="`M50 ${chartThresholdY}H510`" class="chart-threshold"/><polyline v-if="chartPoints" :points="chartPoints" class="chart-series"/><text x="5" y="20">{{ chartMaximum.toFixed(3) }}</text><text x="5" :y="chartThresholdY + 2">{{ detectionThreshold.toFixed(3) }}</text><text x="5" y="118">0.000</text><text x="50" y="133">-5s</text><text x="480" y="133">当前</text><text v-if="!chartPoints" x="285" y="99" class="chart-empty">等待检测数据</text></svg></div></section>
         </div>
       </main>
-      <footer class="bottom-bar"><div class="file-info"><span>视频</span><strong :title="activeName">{{ activeName }}</strong><i v-if="activeName"/><span v-if="activeName">{{ videoWidth }} × {{ videoHeight }} · {{ analysisFPS.toFixed(2) }} FPS</span></div><div class="footer-actions"><button v-if="!isLiveVideo" class="btn btn-muted" @click="restart">↻ 从头播放</button><button class="btn btn-danger" :disabled="!isPlaying" @click="stop">{{ isLiveVideo ? '■ 暂停显示' : '■ 暂停播放' }}</button><button class="btn btn-primary" :disabled="!detectionRecords.length" title="导出当前检测时段的逐帧采样数据" @click="detection.exportCSV">⇩ 导出检测结果</button></div></footer>
+      <footer class="bottom-bar"><div class="file-info"><span>视频</span><strong :title="activeName">{{ activeName }}</strong><i v-if="activeName"/><span v-if="activeName">{{ videoWidth }} × {{ videoHeight }} · {{ analysisFPS.toFixed(2) }} FPS<span v-if="actualFrameRate > 0" :title="isLiveVideo ? '画面刷新实测帧率' : '逐帧检测实际处理帧率'"> · {{ isLiveVideo ? '显示' : '处理' }} {{ actualFrameRate.toFixed(1) }} FPS</span></span></div><div class="footer-actions"><button v-if="!isLiveVideo" class="btn btn-muted" @click="restart">↻ 从头播放</button><button class="btn btn-danger" :disabled="!isPlaying" @click="stop">{{ isLiveVideo ? '■ 暂停显示' : '■ 暂停播放' }}</button><button class="btn btn-primary" :disabled="!detectionRecords.length" title="导出当前检测时段的逐帧采样数据" @click="detection.exportCSV">⇩ 导出检测结果</button></div></footer>
     </template>
 
     <AlgorithmSettingsModal v-if="algorithmSettingsOpen && currentRole === 'admin'" :settings="algorithmSettings" :source="videoSourceSettings" :busy="settingsBusy || archiveBusy" @cancel="cancelAlgorithmSettings" @save="applyAlgorithmSettings" @save-source="applyVideoSourceSettings" @import-profile="importDeviceProfile" @export-profile="exportDeviceProfile"/>
