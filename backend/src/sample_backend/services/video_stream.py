@@ -73,6 +73,10 @@ class VideoSeekInput(VideoNextInput):
     time_s: float = Field(ge=0.0, le=86400, allow_inf_nan=False)
 
 
+class VideoStopInput(BaseModel):
+    session_id: str = Field(min_length=1, max_length=64)
+
+
 class PythonVideoStream:
     def __init__(self, profile: StageProfileStore | None = None) -> None:
         self._profile = profile
@@ -129,6 +133,13 @@ class PythonVideoStream:
     def close(self) -> None:
         with self._lock:
             self._close()
+
+    def stop(self, session_id: str) -> None:
+        """Stop only the specified session; stale UI requests cannot stop a new one."""
+        with self._lock:
+            self._verify(session_id)
+            self._close()
+
 
     def _verify(self, sid: str) -> None:
         if sid != self._id or self._cap is None:
