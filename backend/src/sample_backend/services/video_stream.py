@@ -99,6 +99,7 @@ class PythonVideoStream:
         self._live_thread: threading.Thread | None = None
         self._live_stop = False
         self._live_packet: dict | None = None
+        self._live_overlay_result: dict | None = None
         self._live_serial = 0
         self._live_served = 0
         self._live_error = ''
@@ -107,6 +108,7 @@ class PythonVideoStream:
         self._live_stop = True
         self._live_cv.notify_all()
         self._live_packet = None
+        self._live_overlay_result = None
         self._last_raw_frame = None
         self._probe_frame = None
         if self._cap is not None:
@@ -186,6 +188,7 @@ class PythonVideoStream:
                 self._live_serial = 0
                 self._live_served = 0
                 self._live_packet = None
+                self._live_overlay_result = None
                 self._config = cfg
                 self._station_match_threshold = approved.station_match_threshold
                 self._mode = req.stage_mode
@@ -275,7 +278,12 @@ class PythonVideoStream:
                 if self._live_packet is None or self._live_serial <= self._live_served:
                     raise InvalidFrame('等待实时画面超时，请检查摄像头连接')
                 self._live_served = self._live_serial
-                return self._live_packet
+                # Encode only frames the UI actually requests. A camera may
+                # produce 30+ FPS while the display is paused or capped.
+                packet = dict(self._live_packet)
+                packet['jpeg_base64'] = self._encode_preview(
+                    self._last_raw_frame, self._detector, self._live_overlay_result)
+                return packet
             return self._next_locked()
 
     def _live_loop(self, session_id: str | None) -> None:
@@ -286,7 +294,7 @@ class PythonVideoStream:
                 if self._live_stop or self._id != session_id:
                     return
                 try:
-                    packet = self._next_locked()
+                    packet = self._next_locked(with_preview=False)
                     if packet['ended']:
                         raise InvalidFrame('实时视频源已断开')
                 except Exception:
@@ -365,7 +373,17 @@ class PythonVideoStream:
         self._active_stage = candidate
         return candidate, confidence, scores, ''
 
-    def _next_locked(self) -> dict:
+    @staticmethod
+    def _encode_preview(frame, detector, data: dict | None) -> str:
+        preview = (resize_display_frame(frame) if data is None
+                   else render_detection_frame(frame, detector, data))
+        ok_jpeg, encoded = cv2.imencode('.jpg', preview,
+                                        [cv2.IMWRITE_JPEG_QUALITY, 76])
+        if not ok_jpeg:
+            raise InvalidFrame('Cannot encode annotated preview')
+        return base64.b64encode(encoded).decode('ascii')
+
+    def _next_locked(self, with_preview: bool = True) -> dict:
         assert self._cap is not None
         if self._probe_frame is not None:
             frame = self._probe_frame
@@ -386,15 +404,12 @@ class PythonVideoStream:
             stage, confidence, scores, reason = self._auto_select(frame)
         if reason:
             data = None
-            annotated = resize_display_frame(frame)
         else:
             assert self._detector is not None
             data = self._detector.process(frame)
-            annotated = render_detection_frame(frame, self._detector, data)
-        ok_jpeg, encoded = cv2.imencode('.jpg', annotated,
-                                        [cv2.IMWRITE_JPEG_QUALITY, 76])
-        if not ok_jpeg:
-            raise InvalidFrame('Cannot encode annotated preview')
+        if not with_preview:
+            # Keep the last inference mask until /next requests this frame.
+            self._live_overlay_result = data
         if data is not None:
             self._history.append({'time_s': t, 's_water': float(data['s_water'])})
             while self._history and self._history[0]['time_s'] < t - 5.0:
@@ -418,8 +433,8 @@ class PythonVideoStream:
                 'abnormal_run_s': float(data['abnormal_run_s']),
                 'time_s': t, 'history': list(self._history),
             }
-        return {
-            'ended': False, 'frame_index': index, 'time_s': t,
-            'jpeg_base64': base64.b64encode(encoded).decode('ascii'),
-            'result': result,
-        }
+        packet = {'ended': False, 'frame_index': index, 'time_s': t,
+                  'result': result}
+        if with_preview:
+            packet['jpeg_base64'] = self._encode_preview(frame, self._detector, data)
+        return packet
