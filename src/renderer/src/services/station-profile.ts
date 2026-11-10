@@ -52,3 +52,9 @@ export function importStationArchive(filePath: string, adminToken: string): Prom
     file_path: filePath, admin_token: adminToken,
   })
 }
+
+export function captureLiveStationReference(stage: StageKey, group: ReferenceGroup, adminToken: string): Promise<StationProfile> {
+  return window.desktop.backend.request('POST', '/api/stations/reference/live', {
+    stage, group, admin_token: adminToken,
+  })
+}
