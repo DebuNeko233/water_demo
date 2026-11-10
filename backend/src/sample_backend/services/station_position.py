@@ -34,7 +34,7 @@ class StageCalibrationInput(BaseModel):
 
 class SingleCalibrationInput(BaseModel):
     calibration: CalibrationInput
-    admin_token: str = Field(min_length=1, max_length=128)
+    admin_token: str | None = Field(default=None, max_length=128)
 
 
 class StageReferenceInput(BaseModel):
