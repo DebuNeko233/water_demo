@@ -25,19 +25,19 @@ export interface StationProfile {
 export function getStationProfile(): Promise<StationProfile> {
   return window.desktop.backend.request<StationProfile>('GET', '/api/stations/profile')
 }
-export function saveStationCalibration(stage: StageKey, calibration: WaferCalibration): Promise<StationProfile> {
+export function saveStationCalibration(stage: StageKey, calibration: WaferCalibration, adminToken: string): Promise<StationProfile> {
   return window.desktop.backend.request<StationProfile>('POST', '/api/stations/calibration', {
-    stage, calibration,
+    stage, calibration, admin_token: adminToken,
   })
 }
-export function captureStationReference(stage: StageKey, filePath: string, timeS: number, group: ReferenceGroup = 'default'): Promise<StationProfile> {
+export function captureStationReference(stage: StageKey, filePath: string, timeS: number, group: ReferenceGroup, adminToken: string): Promise<StationProfile> {
   return window.desktop.backend.request<StationProfile>('POST', '/api/stations/reference', {
-    stage, file_path: filePath, time_s: timeS, group,
+    stage, file_path: filePath, time_s: timeS, group, admin_token: adminToken,
   })
 }
-export function removeStationReference(stage: StageKey, referenceId: string): Promise<StationProfile> {
+export function removeStationReference(stage: StageKey, referenceId: string, adminToken: string): Promise<StationProfile> {
   return window.desktop.backend.request<StationProfile>('POST', '/api/stations/reference/remove', {
-    stage, reference_id: referenceId,
+    stage, reference_id: referenceId, admin_token: adminToken,
   })
 }
 
