@@ -72,7 +72,9 @@ const detectorStatus = detection.status
 const detectorError = detection.error
 const detectionRecords = detection.records
 const analysisFPS = detection.sourceFrameRate
-const actualFrameRate = detection.actualFrameRate
+const hasDetectionSession = detection.hasSession
+const startingDetection = ref(false)
+const stoppingDetection = ref(false)
 const calibrationStage = ref<HTMLElement | null>(null)
 const calibrationImage = ref<HTMLImageElement | null>(null)
 const calibrationSvg = ref<SVGSVGElement | null>(null)
@@ -165,8 +167,6 @@ const draftOverlaySize = computed(() => sourceViewBox(draftWidth.value, draftHei
 const detectionThreshold = computed(() => detectorResult.value?.s_water_threshold ?? algorithmSettings.value.s_water_threshold)
 const sectorThreshold = computed(() => detectorResult.value?.sector_threshold ?? algorithmSettings.value.sector_threshold)
 const sectorCount = computed(() => detectorResult.value?.sector_count ?? algorithmSettings.value.sector_count)
-const innerRadiusRatio = computed(() => detectorResult.value?.inner_radius_ratio ?? algorithmSettings.value.inner_radius_ratio)
-const outerRadiusRatio = computed(() => detectorResult.value?.outer_radius_ratio ?? algorithmSettings.value.outer_radius_ratio)
 const resultStatus = computed(() => {
   if (detectorStatus.value === 'error') return 'ERROR'
   if (detectorStatus.value === 'connecting') return '连接中'
@@ -180,7 +180,7 @@ const resultDescription = computed(() => {
   }
   if (detectorStatus.value === 'error') return detectorError.value
   if (detectorStatus.value === 'connecting') return '正在连接 Python 检测服务'
-  if (detectorStatus.value === 'idle') return '播放视频后开始检测'
+  if (detectorStatus.value === 'idle') return '等待开始检测'
   if (resultStatus.value === 'WARMUP') return '正在累积帧差与驻留窗口'
   if (resultStatus.value === 'NG') return '检测到持续水流异常'
   return '水流检测正常'
@@ -303,7 +303,7 @@ async function startConfiguredSource(): Promise<void> {
   videoHeight.value = chosen.height
   screen.value = 'monitor'
   seekDraft.value = null
-  await detection.open('', chosen, 0, isLiveVideo.value, mode)
+  await detection.open('', chosen, 0, true, mode)
   if (videoOpenIssue.value === 'mismatch' && currentRole.value === 'admin' &&
       adminToken.value && !modalOpen.value) {
     openCalibration(false)
@@ -651,16 +651,34 @@ function onMainSeekEnd(event: Event): void {
   seekDraft.value = null
   void detection.seek(seconds, resume)
 }
-function togglePlay(): void {
-  if (isPlaying.value) detection.pause()
-  else detection.play()
+async function startDetection(): Promise<void> {
+  if (startingDetection.value || stoppingDetection.value || isPlaying.value ||
+      detectorStatus.value === 'connecting') return
+  startingDetection.value = true
+  try {
+    if (hasDetectionSession.value) {
+      detection.play()
+    } else {
+      await startConfiguredSource()
+      // This starts a new session only after a saved ROI has been found.
+    }
+  } finally {
+    startingDetection.value = false
+  }
+}
+async function stopDetection(): Promise<void> {
+  if (stoppingDetection.value || !hasDetectionSession.value) return
+  stoppingDetection.value = true
+  try {
+    await detection.stop()
+  } finally {
+    stoppingDetection.value = false
+  }
 }
 function jump(seconds: number): void {
-  if (isLiveVideo.value || !duration.value) return
+  if (isLiveVideo.value || !duration.value || !hasDetectionSession.value) return
   void detection.seek(Math.max(0, Math.min(duration.value, currentTime.value + seconds)))
 }
-function restart(): void { if (!isLiveVideo.value) void detection.seek(0, true) }
-function stop(): void { detection.pause() }
 async function retryPythonVideo(): Promise<void> {
   try {
     await window.desktop.backend.retry()
@@ -917,20 +935,20 @@ onBeforeUnmount(() => {
           </div>
           <div class="video-footer" :class="{ 'video-footer-live': isLiveVideo }">
             <template v-if="!isLiveVideo">
-              <input class="progress-range" type="range" aria-label="视频播放进度" min="0" :max="duration || 1" step="0.01" :value="shownTime" :style="{ '--progress': progress + '%' }" :disabled="!duration" @input="onMainSeek" @change="onMainSeekEnd"/>
-              <div class="playback"><div class="playback-left"><button title="后退 5 秒" aria-label="后退 5 秒" @click="jump(-5)">↶</button><button :title="isPlaying ? '暂停' : '播放'" :aria-label="isPlaying ? '暂停' : '播放'" @click="togglePlay">{{ isPlaying ? 'Ⅱ' : '▶' }}</button><button title="前进 5 秒" aria-label="前进 5 秒" @click="jump(5)">↷</button><span>{{ formatTime(shownTime) }} / {{ formatTime(duration) }}</span></div></div>
+              <input class="progress-range" type="range" aria-label="视频播放进度" min="0" :max="duration || 1" step="0.01" :value="shownTime" :style="{ '--progress': progress + '%' }" :disabled="!duration || !hasDetectionSession" @input="onMainSeek" @change="onMainSeekEnd"/>
+              <div class="playback"><div class="playback-left"><button title="后退 5 秒" aria-label="后退 5 秒" :disabled="!hasDetectionSession" @click="jump(-5)">↶</button><button title="前进 5 秒" aria-label="前进 5 秒" :disabled="!hasDetectionSession" @click="jump(5)">↷</button><span>{{ formatTime(shownTime) }} / {{ formatTime(duration) }}</span></div></div>
             </template>
-            <div v-else class="playback live-playback"><div class="playback-left"><span class="live-label">● 实时画面</span><button :title="isPlaying ? '暂停显示' : '恢复显示'" :aria-label="isPlaying ? '暂停显示' : '恢复显示'" @click="togglePlay">{{ isPlaying ? 'Ⅱ' : '▶' }}</button><span>已运行 {{ formatTime(currentTime) }} · {{ isPlaying ? '监测中' : '显示已暂停' }}</span></div></div>
+            <div v-else class="playback live-playback"><div class="playback-left"><span class="live-label">● 实时画面</span><span>{{ formatTime(currentTime) }}</span></div></div>
           </div>
         </section>
 
         <div class="right-column">
           <section class="panel result-panel"><div><div class="data-label">当前检测结果</div><div class="status-unavailable" :class="{ 'status-good': resultStatus === 'OK', 'status-bad': resultStatus === 'NG', 'status-error': resultStatus === 'ERROR' }">{{ resultStatus }}</div><div v-if="resultStatus === 'ERROR' || resultStatus === '连接中' || resultStatus === 'WARMUP' || resultStatus === 'PAUSED'" class="status-description" :title="resultDescription">{{ resultDescription }}</div></div><div class="result-divider"/><div><div class="data-label">S_water · 当前值</div><div class="result-score">{{ detectorResult && detectorResult.status !== 'PAUSED' ? detectorResult.s_water.toFixed(4) : '--' }}</div><div class="threshold-line">阈值 <b>{{ detectionThreshold.toFixed(4) }}</b></div></div></section>
-          <section class="panel data-panel"><div class="panel-heading"><span class="panel-title">检测数据</span></div><div class="data-grid"><div class="metric"><div class="data-label">运行时间</div><div class="metric-value">{{ currentTime.toFixed(2) }} <small>s</small></div></div><div class="metric"><div class="data-label">S_water</div><div class="metric-value metric-blue">{{ detectorResult && detectorResult.status !== 'PAUSED' ? detectorResult.s_water.toFixed(4) : '--' }}</div></div><div class="metric"><div class="data-label">NG 阈值</div><div class="metric-value metric-orange">{{ detectionThreshold.toFixed(4) }}</div></div><div class="metric"><div class="data-label">异常持续时间</div><div class="metric-value">{{ detectorResult && detectorResult.status !== 'PAUSED' ? detectorResult.abnormal_run_s.toFixed(2) : '--' }} <small>s</small></div></div><div class="metric"><div class="data-label">异常扇区</div><div class="metric-value">{{ worstSector }}</div></div><div class="metric"><div class="data-label">扇区最大值</div><div class="metric-value">{{ detectorResult && detectorResult.status !== 'PAUSED' ? detectorResult.max_sector_score.toFixed(4) : '--' }}</div></div></div><div class="sector-summary"><span>检测区域</span><strong>{{ innerRadiusRatio.toFixed(2) }}R — {{ outerRadiusRatio.toFixed(2) }}R · {{ sectorCount }} 扇区</strong></div></section>
-          <section class="panel chart-panel"><div class="panel-heading"><span class="panel-title">S_water 历史曲线</span><span class="chart-legend"><i/> S_water　 <b>┄</b> NG 阈值</span></div><div class="chart-body"><svg viewBox="0 0 520 140" preserveAspectRatio="none" role="img" aria-label="实时水流异常检测历史曲线"><path d="M50 18H510 M50 66H510 M50 115H510" class="chart-grid"/><path :d="`M50 ${chartThresholdY}H510`" class="chart-threshold"/><polyline v-if="chartPoints" :points="chartPoints" class="chart-series"/><text x="5" y="20">{{ chartMaximum.toFixed(3) }}</text><text x="5" :y="chartThresholdY + 2">{{ detectionThreshold.toFixed(3) }}</text><text x="5" y="118">0.000</text><text x="50" y="133">-5s</text><text x="480" y="133">当前</text><text v-if="!chartPoints" x="285" y="99" class="chart-empty">等待检测数据</text></svg></div></section>
+          <section class="panel data-panel"><div class="panel-heading"><span class="panel-title">检测数据</span></div><div class="data-grid"><div class="metric"><div class="data-label">运行时间</div><div class="metric-value">{{ currentTime.toFixed(2) }} <small>s</small></div></div><div class="metric"><div class="data-label">异常持续时间</div><div class="metric-value">{{ detectorResult && detectorResult.status !== 'PAUSED' ? detectorResult.abnormal_run_s.toFixed(2) : '--' }} <small>s</small></div></div><div class="metric"><div class="data-label">异常扇区</div><div class="metric-value">{{ worstSector }}</div></div><div class="metric"><div class="data-label">扇区最大值</div><div class="metric-value">{{ detectorResult && detectorResult.status !== 'PAUSED' ? detectorResult.max_sector_score.toFixed(4) : '--' }}</div></div></div></section>
+          <section class="panel chart-panel"><div class="panel-heading"><span class="panel-title">异常谱线</span><span class="chart-legend"><i/> S_water　 <b>┄</b> NG 阈值</span></div><div class="chart-body"><svg viewBox="0 0 520 140" preserveAspectRatio="none" role="img" aria-label="实时水流异常检测历史曲线"><path d="M50 18H510 M50 66H510 M50 115H510" class="chart-grid"/><path :d="`M50 ${chartThresholdY}H510`" class="chart-threshold"/><polyline v-if="chartPoints" :points="chartPoints" class="chart-series"/><text x="5" y="20">{{ chartMaximum.toFixed(3) }}</text><text x="5" :y="chartThresholdY + 2">{{ detectionThreshold.toFixed(3) }}</text><text x="5" y="118">0.000</text><text x="50" y="133">-5s</text><text x="480" y="133">当前</text><text v-if="!chartPoints" x="285" y="99" class="chart-empty">等待检测数据</text></svg></div></section>
         </div>
       </main>
-      <footer class="bottom-bar"><div class="file-info"><span>视频</span><strong :title="activeName">{{ activeName }}</strong><i v-if="activeName"/><span v-if="activeName">{{ videoWidth }} × {{ videoHeight }} · {{ analysisFPS.toFixed(2) }} FPS<span v-if="actualFrameRate > 0" :title="isLiveVideo ? '画面刷新实测帧率' : '逐帧检测实际处理帧率'"> · {{ isLiveVideo ? '显示' : '处理' }} {{ actualFrameRate.toFixed(1) }} FPS</span></span></div><div class="footer-actions"><button v-if="!isLiveVideo" class="btn btn-muted" @click="restart">↻ 从头播放</button><button class="btn btn-danger" :disabled="!isPlaying" @click="stop">{{ isLiveVideo ? '■ 暂停显示' : '■ 暂停播放' }}</button><button class="btn btn-primary" :disabled="!detectionRecords.length" title="导出当前检测时段的逐帧采样数据" @click="detection.exportCSV">⇩ 导出检测结果</button></div></footer>
+      <footer class="bottom-bar"><div class="file-info"><span>视频参数</span><strong :title="sourceLabel">{{ sourceLabel }}</strong><i v-if="videoWidth && videoHeight"/><span v-if="videoWidth && videoHeight">{{ videoWidth }} × {{ videoHeight }}</span><span v-if="analysisFPS > 0">· {{ analysisFPS.toFixed(2) }} FPS</span></div><div class="footer-actions"><button class="btn btn-primary" :disabled="isPlaying || startingDetection || stoppingDetection || detectorStatus === 'connecting'" @click="startDetection">▶ 开始检测</button><button class="btn btn-danger" :disabled="!hasDetectionSession || stoppingDetection" @click="stopDetection">■ 停止检测</button><button class="btn btn-muted" :disabled="!detectionRecords.length" title="导出当前检测时段的逐帧采样数据" @click="detection.exportCSV">⇩ 导出检测结果</button></div></footer>
     </template>
 
     <AlgorithmSettingsModal v-if="algorithmSettingsOpen && currentRole === 'admin'" :settings="algorithmSettings" :source="videoSourceSettings" :busy="settingsBusy || archiveBusy" @cancel="cancelAlgorithmSettings" @save="applyAlgorithmSettings" @save-source="applyVideoSourceSettings" @import-profile="importDeviceProfile" @export-profile="exportDeviceProfile"/>
