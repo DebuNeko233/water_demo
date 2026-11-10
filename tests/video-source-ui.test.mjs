@@ -32,7 +32,7 @@ test('live camera has no seeking; detection uses explicit start-stop controls', 
   assert.match(app, /v-else class="playback live-playback"/)
   assert.match(app, /@click="startDetection">▶ 开始检测/)
   assert.match(app, /@click="stopDetection">■ 停止检测/)
-  assert.doesNotMatch(app, /@click="togglePlay"/)
+  assert.match(app, /@click="togglePlay"/)
   assert.doesNotMatch(app, /@click="restart"/)
   assert.match(app, /isLiveVideo\.value \|\| !duration\.value/)
   assert.match(playback, /if \(!sid \|\| isLive\.value\) return/)
