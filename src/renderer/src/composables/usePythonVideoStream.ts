@@ -11,7 +11,8 @@ import { describeVideoOpenError } from '../utils/video-open-error.mjs'
 import type { DetectionResult, WaferCalibration } from '../services/water-detection'
 import type { StageMode } from '../services/station-profile'
 import {
-  openPythonVideo, readPythonVideoFrame, seekPythonVideo, stopPythonVideo,
+  openPythonVideo, readPythonVideoFrame, seekPythonVideo,
+  setPythonDetection,
   type AnnotatedFrame,
 } from '../services/python-video'
 
@@ -34,6 +35,7 @@ export function usePythonVideoStream() {
   const videoHeight = ref(0)
   const isPlaying = ref(false)
   const hasSession = ref(false)
+  const isDetecting = ref(false)
   let sessionId: string | null = null
   let reachedEnd = false
   let version = 0
@@ -55,6 +57,7 @@ export function usePythonVideoStream() {
     version += 1
     sessionId = null
     hasSession.value = false
+    isDetecting.value = false
     reachedEnd = false
     status.value = 'idle'
     result.value = null
@@ -87,12 +90,18 @@ export function usePythonVideoStream() {
     await ready.decode()
     if (expectedVersion !== version) return
     renderedFrame.value = uri
-    result.value = packet.result
     currentTime.value = packet.time_s
-    if (packet.samples?.length) records.value.push(...packet.samples)
-    records.value.push(packet.result)
-    if (isLive.value && records.value.length > 3000) records.value.splice(0, 1000)
-    status.value = packet.result.history_ready ? 'running' : 'warming'
+    // Display continues when algorithm is disabled. No false verdicts or CSV.
+    if (isDetecting.value && packet.detecting !== false) {
+      result.value = packet.result
+      if (packet.samples?.length) records.value.push(...packet.samples)
+      records.value.push(packet.result)
+      if (isLive.value && records.value.length > 3000) records.value.splice(0, 1000)
+      status.value = packet.result.history_ready ? 'running' : 'warming'
+    } else {
+      result.value = null
+      status.value = 'idle'
+    }
     error.value = ''
   }
 
@@ -184,6 +193,7 @@ export function usePythonVideoStream() {
   async function open(
     filePath: string, calibration: WaferCalibration,
     timeS: number, autoplay = false, stageMode: StageMode = 'single',
+    detectOnOpen = false,
   ): Promise<void> {
     invalidate()
     const epoch = version
@@ -192,7 +202,8 @@ export function usePythonVideoStream() {
     // response from advancing the newly opened Python VideoCapture.
     const request = commandChain.then(async () => {
       if (pendingRead) await pendingRead.catch(() => undefined)
-      return openPythonVideo(filePath, calibration, Math.max(0, timeS), stageMode)
+      return openPythonVideo(filePath, calibration, Math.max(0, timeS),
+        stageMode, detectOnOpen)
     })
     commandChain = request.then(() => undefined, () => undefined)
     try {
@@ -200,6 +211,7 @@ export function usePythonVideoStream() {
       if (epoch !== version) return
       sessionId = session.session_id
       hasSession.value = true
+      isDetecting.value = session.detecting
       sourceFrameRate.value = session.fps
       duration.value = session.duration_s
       isLive.value = session.is_live
@@ -218,31 +230,32 @@ export function usePythonVideoStream() {
     }
   }
 
-  async function stop(): Promise<void> {
+  async function startDetection(): Promise<void> {
     const sid = sessionId
-    pause()
-    version += 1
-    sessionId = null
-    hasSession.value = false
-    reachedEnd = false
-    // Preserve the last preview, elapsed time, source metadata, and CSV
-    // records, but clear the active detection verdict.
-    status.value = 'idle'
+    if (!sid || isDetecting.value) return
+    const epoch = version
+    const request = commandChain.then(() => setPythonDetection(sid, true))
+    commandChain = request.then(() => undefined, () => undefined)
+    const state = await request
+    if (sessionId !== sid || epoch !== version) return
+    isDetecting.value = state.detecting
     result.value = null
-    error.value = ''
-    openIssue.value = null
-    actualFrameRate.value = 0
-    measuredStart = 0
-    measuredFrames = 0
-    if (!sid) return
-    const closing = commandChain.then(async () => {
-      if (pendingRead) await pendingRead.catch(() => undefined)
-      await stopPythonVideo(sid)
-    })
-    commandChain = closing.then(() => undefined, () => undefined)
-    // The UI is already stopped. An expired backend session means it has
-    // already been released; do not re-enable detection on that response.
-    await closing.catch(() => undefined)
+    records.value = []
+    status.value = 'warming'
+  }
+
+  async function stopDetection(): Promise<void> {
+    const sid = sessionId
+    if (!sid || !isDetecting.value) return
+    const epoch = version
+    const request = commandChain.then(() => setPythonDetection(sid, false))
+    commandChain = request.then(() => undefined, () => undefined)
+    const state = await request
+    if (sessionId !== sid || epoch !== version) return
+    isDetecting.value = state.detecting
+    result.value = null
+    status.value = 'idle'
+    // Video playback, camera stream, and CSV records remain untouched.
   }
 
   async function seek(timeS: number, resume = isPlaying.value): Promise<void> {
@@ -303,7 +316,7 @@ export function usePythonVideoStream() {
   return {
     status, result, error, openIssue, records, renderedFrame, sourceFrameRate,
     currentTime, duration, isLive, sourceKind, videoWidth, videoHeight,
-    actualFrameRate, isPlaying, hasSession,
-    open, seek, play, pause, stop, invalidate, exportCSV,
+    actualFrameRate, isPlaying, hasSession, isDetecting,
+    open, seek, play, pause, startDetection, stopDetection, invalidate, exportCSV,
   }
 }
