@@ -25,6 +25,31 @@ from .water_session import CalibrationInput, DetectorSettings, InvalidFrame, Ses
 from .video_source import VideoSourceSettings, open_capture
 
 VIDEO_SUFFIXES = {'.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v'}
+MAX_FRAME_PIXELS = 4_194_304
+
+
+class VideoDimensionsMismatch(InvalidFrame):
+    """The selected input does not match the ROI's original pixel grid."""
+
+    def __init__(self, width: int, height: int, calibration: CalibrationInput):
+        self.width = width
+        self.height = height
+        self.calibration_width = calibration.width
+        self.calibration_height = calibration.height
+        super().__init__(
+            f'视频 {width}×{height} 与标定 {calibration.width}×{calibration.height} '
+            '分辨率不一致，请管理员重新标注')
+
+
+class VideoDimensionsTooLarge(InvalidFrame):
+    """An input exceeds the tested detector memory / frame-size limit."""
+
+    def __init__(self, width: int, height: int):
+        self.width = width
+        self.height = height
+        super().__init__(
+            f'视频 {width}×{height} 超过检测分辨率上限，请降低摄像头或视频分辨率')
+
 
 
 class VideoOpenInput(BaseModel):
@@ -119,9 +144,12 @@ class PythonVideoStream:
             fps = float(cap.get(cv2.CAP_PROP_FPS))
             frame_count = max(0, int(cap.get(cv2.CAP_PROP_FRAME_COUNT)))
             cal = req.calibration
-            if ((height, width) != (cal.height, cal.width)
-                    or width <= 0 or height <= 0 or width * height > 4_194_304):
-                raise InvalidFrame('Video dimensions differ from wafer calibration or are too large')
+            if width <= 0 or height <= 0:
+                raise InvalidFrame('无法读取视频分辨率')
+            if width * height > MAX_FRAME_PIXELS:
+                raise VideoDimensionsTooLarge(width, height)
+            if (height, width) != (cal.height, cal.width):
+                raise VideoDimensionsMismatch(width, height, cal)
             if not math.isfinite(fps) or not 1 <= fps <= 240:
                 if live:
                     fps = 30.0  # Fallback when the camera driver omits FPS.
