@@ -64,6 +64,9 @@ class VideoOpenInput(BaseModel):
 
 class VideoNextInput(BaseModel):
     session_id: str = Field(min_length=1, max_length=64)
+    # File mode: infer every frame, transmit only the final display JPEG.
+    # A default of 1 keeps existing clients fully backward compatible.
+    batch_frames: int = Field(default=1, ge=1, le=6)
 
 
 class VideoSeekInput(VideoNextInput):
@@ -281,10 +284,50 @@ class PythonVideoStream:
                 # Encode only frames the UI actually requests. A camera may
                 # produce 30+ FPS while the display is paused or capped.
                 packet = dict(self._live_packet)
+                started = time.perf_counter()
                 packet['jpeg_base64'] = self._encode_preview(
                     self._last_raw_frame, self._detector, self._live_overlay_result)
+                packet['performance'] = {
+                    **packet['performance'],
+                    'preview_ms': round((time.perf_counter() - started) * 1000, 2),
+                }
                 return packet
-            return self._next_locked()
+            if req.batch_frames == 1:
+                return self._next_locked()
+            # On HD files, sending one JSON+JPEG per decoded frame is often
+            # slower than inference itself. Preserve all temporal samples but
+            # only annotate and encode the last frame in this batch.
+            packet = None
+            intermediate = []
+            total_decode_ms = 0.0
+            total_analysis_ms = 0.0
+            count = 0
+            for _ in range(req.batch_frames):
+                candidate = self._next_locked(with_preview=False)
+                if candidate['ended']:
+                    break
+                if packet is not None:
+                    sample = dict(packet['result'])
+                    sample.pop('history', None)  # Only current frame needs chart.
+                    intermediate.append(sample)
+                packet = candidate
+                cost = candidate['performance']
+                total_decode_ms += cost['decode_ms']
+                total_analysis_ms += cost['analysis_ms']
+                count += 1
+            if packet is None:
+                return {'ended': True}
+            start_preview = time.perf_counter()
+            packet['jpeg_base64'] = self._encode_preview(
+                self._last_raw_frame, self._detector, self._live_overlay_result)
+            packet['performance'] = {
+                'frames': count,
+                'decode_ms': round(total_decode_ms / count, 2),
+                'analysis_ms': round(total_analysis_ms / count, 2),
+                'preview_ms': round((time.perf_counter() - start_preview) * 1000, 2),
+            }
+            packet['samples'] = intermediate
+            return packet
 
     def _live_loop(self, session_id: str | None) -> None:
         """Analyze every decoded live frame; renderer sees only the latest."""
@@ -385,6 +428,7 @@ class PythonVideoStream:
 
     def _next_locked(self, with_preview: bool = True) -> dict:
         assert self._cap is not None
+        started = time.perf_counter()
         if self._probe_frame is not None:
             frame = self._probe_frame
             self._probe_frame = None
@@ -394,6 +438,7 @@ class PythonVideoStream:
         if not ok or frame is None:
             return {'ended': True}
         self._last_raw_frame = frame
+        decoded_at = time.perf_counter()
         index = self._next_index
         self._next_index += 1
         t = index / self._fps
@@ -433,8 +478,17 @@ class PythonVideoStream:
                 'abnormal_run_s': float(data['abnormal_run_s']),
                 'time_s': t, 'history': list(self._history),
             }
+        analyzed_at = time.perf_counter()
         packet = {'ended': False, 'frame_index': index, 'time_s': t,
-                  'result': result}
+                  'result': result,
+                  'performance': {
+                      'frames': 1,
+                      'decode_ms': round((decoded_at - started) * 1000, 2),
+                      'analysis_ms': round((analyzed_at - decoded_at) * 1000, 2),
+                      'preview_ms': 0.0,
+                  }}
         if with_preview:
             packet['jpeg_base64'] = self._encode_preview(frame, self._detector, data)
+            packet['performance']['preview_ms'] = round(
+                (time.perf_counter() - analyzed_at) * 1000, 2)
         return packet
