@@ -202,3 +202,39 @@ def test_single_calibration_survives_restart_and_requires_admin(monkeypatch, tmp
         assert profile['single_calibration'] == coords
     with TestClient(create_app()) as reopened:
         assert reopened.get('/api/stations/profile').json()['single_calibration'] == coords
+
+def test_rtsp_stream_uses_saved_admin_url_and_first_frame_dimensions(monkeypatch, tmp_path):
+    monkeypatch.setenv('APP_DATA_DIR', str(tmp_path / 'data'))
+    captured = []
+    class CameraWithMissingMetadata(FakeCamera):
+        def get(self, prop):
+            if prop in (cv2.CAP_PROP_FRAME_WIDTH, cv2.CAP_PROP_FRAME_HEIGHT,
+                        cv2.CAP_PROP_FPS):
+                return 0
+            return super().get(prop)
+    def open_source(source, file_path=''):
+        assert source.kind == 'rtsp'
+        assert source.rtsp_url == 'rtsp://cam:secret@127.0.0.1:8554/stream'
+        assert file_path == ''
+        captured.append(1)
+        return CameraWithMissingMetadata()
+    monkeypatch.setattr(video_stream, 'open_capture', open_source)
+    with TestClient(create_app()) as client:
+        token = admin(client)
+        response = client.post('/api/video/source/save', json={
+            'admin_token': token,
+            'source': {'kind': 'rtsp', 'rtsp_url': 'rtsp://cam:secret@127.0.0.1:8554/stream'},
+        })
+        assert response.status_code == 200
+        opened = client.post('/api/video/open', json={
+            'calibration': {'cx': 48, 'cy': 48, 'radius': 30, 'width': 96, 'height': 96},
+        })
+        assert opened.status_code == 200, opened.text
+        payload = opened.json()
+        assert payload['source_kind'] == 'rtsp'
+        assert payload['is_live'] is True
+        assert payload['width'] == 96 and payload['height'] == 96
+        assert payload['fps'] == 30
+        assert payload['frame']['frame_index'] == 0
+        assert captured == [1]
+        assert 'secret' not in str(client.get('/api/video/source').json())
