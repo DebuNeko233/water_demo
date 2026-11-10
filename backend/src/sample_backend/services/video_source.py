@@ -23,9 +23,15 @@ class VideoSourceSettings(BaseModel):
     kind: Literal['file', 'rtsp', 'usb'] = 'file'
     rtsp_url: str = Field(default='', max_length=2048)
     usb_index: int = Field(default=0, ge=0, le=15)
+    file_path: str = Field(default='', max_length=4096)
 
     @model_validator(mode='after')
     def check_source(self):
+        if self.kind == 'file' and self.file_path:
+            from .video_stream import VIDEO_SUFFIXES
+            target = Path(self.file_path)
+            if not target.is_absolute() or target.suffix.lower() not in VIDEO_SUFFIXES:
+                raise ValueError('本地视频路径或格式无效')
         if self.kind == 'rtsp':
             try:
                 parsed = urlsplit(self.rtsp_url)
@@ -60,6 +66,9 @@ class VideoSourceStore:
 
     def save(self, settings: VideoSourceSettings) -> VideoSourceSettings:
         with self._lock:
+            if settings.kind == 'file' and settings.file_path:
+                if not Path(settings.file_path).is_file():
+                    raise InvalidFrame('所选本地视频不存在')
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_name(uuid4().hex + '.tmp')
             try:
@@ -77,7 +86,7 @@ def open_capture(source: VideoSourceSettings, file_path: str = '') -> cv2.VideoC
     """Use only the configured capture class; no arbitrary filesystem/device URL."""
     if source.kind == 'file':
         from .video_stream import VIDEO_SUFFIXES
-        target = Path(file_path)
+        target = Path(source.file_path or file_path)
         if not target.is_file() or target.suffix.lower() not in VIDEO_SUFFIXES:
             raise InvalidFrame('请选择本地视频文件')
         cap = cv2.VideoCapture(str(target))
