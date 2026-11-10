@@ -21,6 +21,7 @@ def configured_client(client, tmp_path):
     writer.release()
     for j, stage in enumerate(("P1", "P2", "P3")):
         response = client.post("/api/stations/calibration", json={
+            "admin_token": admin_token(client),
             "stage": stage, "calibration": {
                 "cx": 48, "cy": [25, 47, 69][j], "radius": 26,
                 "width": 96, "height": 96,
@@ -29,6 +30,7 @@ def configured_client(client, tmp_path):
         assert response.status_code == 200, response.text
         for i in range(3):
             response = client.post("/api/stations/reference", json={
+            "admin_token": admin_token(client),
                 "stage": stage, "file_path": str(source),
                 "time_s": (j * 25 + i * 5) / 30,
             })
@@ -39,9 +41,16 @@ def configured_client(client, tmp_path):
 
 
 def admin_token(client):
-    reply = client.post("/api/users/setup", json={"password": "Profile#72914"})
+    existing = getattr(client, '_test_admin_token', None)
+    if existing:
+        return existing
+    password = "Profile#72914"
+    reply = client.post("/api/users/login", json={"password": password})
+    if reply.status_code == 409:
+        reply = client.post("/api/users/setup", json={"password": password})
     assert reply.status_code == 200, reply.text
-    return reply.json()["admin_token"]
+    client._test_admin_token = reply.json()["admin_token"]
+    return client._test_admin_token
 
 
 def test_backup_contains_roi_png_nozzle_groups_and_approved_settings(monkeypatch, tmp_path):
@@ -78,6 +87,7 @@ def test_backup_contains_roi_png_nozzle_groups_and_approved_settings(monkeypatch
 
         first_ref = profile["stages"]["P1"]["references"][0]
         client.post("/api/stations/reference/remove", json={
+            "admin_token": admin_token(client),
             "stage": "P1", "reference_id": first_ref["id"],
         })
         assert client.get("/api/stations/profile").json()["ready"] is False
@@ -161,6 +171,7 @@ def test_settings_save_failure_restores_original_calibration(monkeypatch, tmp_pa
         }).status_code == 200
         root = tmp_path / "data" / "stations"
         client.post("/api/stations/calibration", json={
+            "admin_token": admin_token(client),
             "stage": "P1", "calibration": {
                 "cx": 48, "cy": 38, "radius": 26, "width": 96, "height": 96,
             },
