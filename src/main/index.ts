@@ -93,6 +93,15 @@ function registerIpc(): void {
     const selection = await dialog.showOpenDialog(mainWindow!, { properties: ['openFile'] })
     return selection.canceled ? null : selection.filePaths[0]
   })
+  ipcMain.handle('system:select-video-file', async (event) => {
+    checkSender(event)
+    const selection = await dialog.showOpenDialog(mainWindow!, {
+      title: '选择本地视频',
+      properties: ['openFile'],
+      filters: [{ name: '视频文件', extensions: ['mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v'] }],
+    })
+    return selection.canceled ? null : selection.filePaths[0]
+  })
   ipcMain.handle('system:choose-profile-archive', async (event) => {
     checkSender(event)
     const choice = await dialog.showOpenDialog(mainWindow!, {
