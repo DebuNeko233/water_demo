@@ -9,6 +9,7 @@ from sample_backend.services.station_position import (
     StageCalibrationInput, StageReferenceInput, StageRemoveReferenceInput,
 )
 from sample_backend.services.water_session import InvalidFrame, WaterDetectionSession
+from sample_backend.services.user_access import AccessDenied
 
 router = APIRouter(prefix='/api/stations')
 
@@ -21,7 +22,10 @@ def profile(request: Request) -> dict:
 @router.post('/calibration')
 def save_calibration(req: StageCalibrationInput, request: Request) -> dict:
     try:
+        request.app.state.user_access.require_admin(req.admin_token)
         return request.app.state.station_profile.calibrate(req)
+    except AccessDenied as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
     except (InvalidFrame, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -29,7 +33,10 @@ def save_calibration(req: StageCalibrationInput, request: Request) -> dict:
 @router.post('/reference')
 def capture_reference(req: StageReferenceInput, request: Request) -> dict:
     try:
+        request.app.state.user_access.require_admin(req.admin_token)
         return request.app.state.station_profile.capture(req)
+    except AccessDenied as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
     except (InvalidFrame, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -37,7 +44,10 @@ def capture_reference(req: StageReferenceInput, request: Request) -> dict:
 @router.post('/reference/remove')
 def remove_reference(req: StageRemoveReferenceInput, request: Request) -> dict:
     try:
+        request.app.state.user_access.require_admin(req.admin_token)
         return request.app.state.station_profile.remove_reference(req)
+    except AccessDenied as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
     except (InvalidFrame, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
