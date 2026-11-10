@@ -21,6 +21,7 @@ from .services.water_session import WaterDetectionSession
 from .services.video_stream import PythonVideoStream
 from .services.user_access import LocalUserAccess
 from .services.station_position import StageProfileStore
+from .services.video_source import VideoSourceStore
 from .services.event_hub import EventHub
 
 
@@ -32,6 +33,7 @@ async def lifespan(app: FastAPI):
     app.state.jobs = DemoJobs(app.state.events.publish)
     app.state.water_detector = WaterDetectionSession()
     app.state.station_profile = StageProfileStore()
+    app.state.video_source = VideoSourceStore()
     app.state.video_stream = PythonVideoStream(app.state.station_profile)
     app.state.user_access = LocalUserAccess()
     logger.info("FastAPI is starting")
