@@ -231,6 +231,10 @@ export class BackendManager {
     const maxSize = apiPath === '/api/detection/frame' ? 25_000_000 : 65_536
     if (json && json.length > maxSize) throw new Error('Request too large')
     await this.waitUntilReady()
+    // RTSP cameras can need several seconds for network/codec negotiation.
+    // Longer timeouts are restricted to source-open and snapshot operations.
+    const timeoutMs = ['/api/video/open', '/api/video/snapshot',
+      '/api/stations/reference/live'].includes(apiPath) ? 45_000 : 15_000
     const response = await fetch(this.baseUrl + apiPath, {
       method,
       headers: {
@@ -238,7 +242,7 @@ export class BackendManager {
         ...(json === undefined ? {} : { 'content-type': 'application/json' }),
       },
       body: json,
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(timeoutMs),
     })
     const result: unknown = await response.json().catch(() => null)
     if (!response.ok) throw new Error('Python API ' + response.status + ': ' + JSON.stringify(result))
