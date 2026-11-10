@@ -7,6 +7,7 @@
  * to source FPS. Pausing stops requests; seeking requests a new detector state.
  */
 import { onBeforeUnmount, ref } from 'vue'
+import { describeVideoOpenError } from '../utils/video-open-error.mjs'
 import type { DetectionResult, WaferCalibration } from '../services/water-detection'
 import type { StageMode } from '../services/station-profile'
 import {
@@ -20,6 +21,7 @@ export function usePythonVideoStream() {
   const status = ref<StreamStatus>('idle')
   const result = ref<DetectionResult | null>(null)
   const error = ref('')
+  const openIssue = ref<'mismatch' | 'oversize' | null>(null)
   const records = ref<DetectionResult[]>([])
   const renderedFrame = ref('')
   const sourceFrameRate = ref(0)
@@ -55,6 +57,7 @@ export function usePythonVideoStream() {
     sourceKind.value = 'file'
     renderedFrame.value = ''
     error.value = ''
+    openIssue.value = null
   }
 
   async function showFrame(packet: AnnotatedFrame, expectedVersion: number): Promise<void> {
@@ -151,7 +154,9 @@ export function usePythonVideoStream() {
     } catch (reason) {
       if (epoch !== version) return
       status.value = 'error'
-      error.value = 'Python 打开视频失败：' + String(reason)
+      const failure = describeVideoOpenError(reason)
+      openIssue.value = failure.kind === 'other' ? null : failure.kind
+      error.value = failure.message
     }
   }
 
@@ -208,7 +213,7 @@ export function usePythonVideoStream() {
 
   onBeforeUnmount(invalidate)
   return {
-    status, result, error, records, renderedFrame, sourceFrameRate,
+    status, result, error, openIssue, records, renderedFrame, sourceFrameRate,
     currentTime, duration, isLive, sourceKind, videoWidth, videoHeight, isPlaying,
     open, seek, play, pause, invalidate, exportCSV,
   }
