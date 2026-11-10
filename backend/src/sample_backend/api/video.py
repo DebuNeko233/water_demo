@@ -60,6 +60,22 @@ def video_seek(req: VideoSeekInput, request: Request) -> dict:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@router.post('/detection/start')
+def start_detection(req: VideoStopInput, request: Request) -> dict:
+    try:
+        return request.app.state.video_stream.set_detection(req.session_id, True)
+    except SessionExpired as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post('/detection/stop')
+def stop_detection(req: VideoStopInput, request: Request) -> dict:
+    try:
+        return request.app.state.video_stream.set_detection(req.session_id, False)
+    except SessionExpired as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.post('/stop')
 def video_stop(req: VideoStopInput, request: Request) -> dict:
     try:
