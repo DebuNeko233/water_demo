@@ -6,7 +6,7 @@
 
 - 管理员在「系统设置」中切换 **检测参数 / 视频源 / 设备配置** 三个 Tab；视频源支持本地文件、RTSP 网络摄像头和 USB 摄像头（USB 设备编号 0～15）。
 - 本地视频保留进度条、原有播放/暂停及 5 秒跳转；RTSP/USB 保留独立的画面暂停/继续，但不显示进度条或时间跳转。底部「开始检测」「停止检测」**仅控制 Python 水流算法**：停止检测后画面和视频会话继续，检测记录仍可导出；再次开始会在当前画面位置重新初始化检测窗口和判定状态。视频画面暂停不会改变检测开关（本地文件暂停期间不产生新帧，实时摄像头后台仍可检测）。
-- RTSP/USB 的晶圆 ROI 由管理员使用「刷新画面」抓拍现场画面标注；采集 P1/P2/P3 参考帧时保存原始 OpenCV PNG，不经浏览器 JPEG 截图。单工位 ROI 也会持久保存，跨重启复用。
+- RTSP/USB 的晶圆 ROI 由管理员使用「刷新画面」抓拍现场画面标注；采集 P1/P2/P3 参考帧时保存原始 OpenCV PNG，不经浏览器 JPEG 截图。每个工位的 ROI 都会持久保存，跨重启复用。
 - 管理员在「系统设置 → 视频源 → 本地视频」点击「浏览…」选择文件，设置页显示完整视频路径，保存后跨软件重启保留；监测页只负责「打开视频」。首次使用没有标定时，由管理员打开标定窗口。
 - 标定窗口统一显示 P1/P2/P3，每个工位独立「启用」开关和 ROI 标注，不再分「单工位 / 三工位自动」模式。**仅启用 1 个工位**时直接用该 ROI 检测，无需参考帧；**启用 2～3 个工位**时仅在启用的工位之间进行截图匹配，每个启用工位至少需 **3 张**同组参考帧（最多 12 张），关闭的工位不参与匹配。
 - 所有已启用工位完成配置后才能开始检测；至少启用一个工位。截图来自 Python/OpenCV 无损原始帧，切换工位启用状态会使旧检测会话失效。
@@ -29,9 +29,9 @@
 
 **工位启用与兼容。** 每个工位的启用状态、ROI 和参考截图均保存在 `stations/profile.json`，导入/导出设备配置 ZIP 时会一起保存。旧三工位配置缺少启用字段时默认保留三个工位启用；旧配置仅有独立单工位 ROI、没有工位标定时，自动迁移到启用的 P1，关闭 P2/P3。旧数据不会因切换开关而删除。
 
-**标定文件位置与备份。** Windows 打包版 Python 的 APP_DATA_DIR 为 Electron `app.getPath('userData')/data`，ZeboVision 正式版通常是 `%APPDATA%\\ZeboVision\\data`。三个 ROI 和单工位标定保存在 `stations/profile.json`，无损参考帧是同目录的 `*.png`；已批准的水流判定参数保存在 `users/admin.json`（同时包含管理员密码哈希，因此不要手动在设备间复制此文件）。开发版默认使用 `%USERPROFILE%\\.python-electron-vue-sample`，如设置 `APP_DATA_DIR` 则以该值为准。导入、导出都需要管理员登录，导入会覆盖当前的三工位标定与算法参数，但**不会改动本机管理员密码**。不要直接复制单独的 JSON 文件，建议使用界面里的 ZIP 备份。ZIP 的格式版本为 1，含 `manifest.json`、`stations/profile.json`、`stations/references/*.png`、`detector/settings.json`；不包含视频源、检测历史或登录凭据。
+**标定文件位置与备份。** Windows 打包版 Python 的 APP_DATA_DIR 为 Electron `app.getPath('userData')/data`，ZeboVision 正式版通常是 `%APPDATA%\\ZeboVision\\data`。P1/P2/P3 的 ROI 及启用状态保存在 `stations/profile.json`，无损参考帧是同目录的 `*.png`；已批准的水流判定参数保存在 `users/admin.json`（同时包含管理员密码哈希，因此不要手动在设备间复制此文件）。开发版默认使用 `%USERPROFILE%\\.python-electron-vue-sample`，如设置 `APP_DATA_DIR` 则以该值为准。导入、导出都需要管理员登录，导入会覆盖当前的三工位标定与算法参数，但**不会改动本机管理员密码**。不要直接复制单独的 JSON 文件，建议使用界面里的 ZIP 备份。ZIP 的格式版本为 1，含 `manifest.json`、`stations/profile.json`、`stations/references/*.png`、`detector/settings.json`；不包含视频源、检测历史或登录凭据。
 
-**重新标注管理员权限：** 监测页的「重新标注」按钮只对管理员显示。操作员打开管理员配置的视频源时，自动使用已保存的单工位标定或完整三工位标定；如果尚无可用标定，会提示切换管理员。管理员退出登录时标定窗口立即关闭。后端 `POST /api/stations/calibration`、`/api/stations/reference`、`/api/stations/reference/remove` 均须有效管理员令牌，直接调用接口也不能越权修改设备保存的 ROI 或参考帧。现有 `GET /api/stations/profile` 允许操作员读取配置，以便复用。所选视频分辨率与标定不一致时，Python 会提示管理员重新标定。
+**重新标注管理员权限：** 监测页的「重新标注」按钮只对管理员显示。操作员打开管理员配置的视频源时，自动使用已启用工位的 ROI；只有多个工位启用时才自动匹配参考帧；如果尚无可用标定，会提示切换管理员。管理员退出登录时标定窗口立即关闭。后端 `POST /api/stations/enabled`、`/api/stations/calibration`、`/api/stations/reference`、`/api/stations/reference/remove` 均须有效管理员令牌，直接调用接口也不能越权修改设备保存的 ROI 或参考帧。现有 `GET /api/stations/profile` 允许操作员读取配置，以便复用。所选视频分辨率与标定不一致时，Python 会提示管理员重新标定。
 
 **用户权限与密码。** 管理员密码只在本机首次切换时设置，无固定默认密码；后端用随机盐和 PBKDF2-SHA256 保存密码哈希到应用数据目录 `users/admin.json`，不会以明文保存在前端。管理员认证令牌仅保存在当前页面内存，软件/后端重启后自动恢复操作员。连续输错密码会短暂锁定登录。忘记密码时需要由有本机文件访问权限的人在退出软件后备份并删除 `users/admin.json`，**这也会清空管理员已保存的算法参数**；重新进入管理员时重新设置。该功能为本机使用权限管理，不替代操作系统文件保护与企业级身份认证。
 
