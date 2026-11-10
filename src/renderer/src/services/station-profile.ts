@@ -2,7 +2,7 @@
 import type { WaferCalibration } from './water-detection'
 
 export type StageKey = 'P1' | 'P2' | 'P3'
-export type StageMode = 'single' | 'auto'
+export type StageMode = 'single' | 'auto' | 'configured'
 export type ReferenceGroup = 'default' | 'nozzle_a' | 'nozzle_b'
 export const STAGES: StageKey[] = ['P1', 'P2', 'P3']
 
@@ -13,6 +13,8 @@ export interface StageReference {
   source: string
 }
 export interface StageConfig {
+  enabled: boolean
+  ready: boolean
   calibration: WaferCalibration | null
   references: StageReference[]
 }
@@ -20,15 +22,16 @@ export interface StationProfile {
   version: number
   single_calibration?: WaferCalibration | null
   ready: boolean
+  enabled_stages: StageKey[]
   minimum_references: number
   stages: Record<StageKey, StageConfig>
 }
 export function getStationProfile(): Promise<StationProfile> {
   return window.desktop.backend.request<StationProfile>('GET', '/api/stations/profile')
 }
-export function saveSingleCalibration(calibration: WaferCalibration, adminToken: string): Promise<StationProfile> {
-  return window.desktop.backend.request('POST', '/api/stations/calibration/single', {
-    calibration, admin_token: adminToken,
+export function setStationEnabled(stage: StageKey, enabled: boolean, adminToken: string): Promise<StationProfile> {
+  return window.desktop.backend.request<StationProfile>('POST', '/api/stations/enabled', {
+    stage, enabled, admin_token: adminToken,
   })
 }
 
