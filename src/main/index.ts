@@ -255,7 +255,10 @@ async function runPackagedSmokeTest(): Promise<void> {
         const title = document.querySelector('.app-title')?.textContent?.trim()
         const monitor = document.querySelector('.video-panel .panel-title')?.textContent?.trim()
         const controls = [...document.querySelectorAll('.heading-actions button')]
-        const openVideo = controls.find(btn => btn.textContent?.trim() === '打开视频')
+        const openVideo = controls.find(btn =>
+          btn.getAttribute('aria-label') === '打开视频' &&
+          btn.querySelector('svg[aria-hidden="true"]') &&
+          !btn.textContent?.trim())
         const gear = document.querySelector('button.algorithm-gear[aria-label="系统设置"]')
         const role = document.querySelector('button.role-switch')?.textContent?.trim()
         const fileInput = document.querySelector('input[type="file"]')
