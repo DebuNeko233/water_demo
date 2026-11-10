@@ -183,3 +183,22 @@ def test_live_camera_disconnect_gives_error_instead_of_end_of_file(monkeypatch, 
         })
         assert packet.status_code == 422
         assert '实时视频源' in packet.json()['detail']
+
+def test_single_calibration_survives_restart_and_requires_admin(monkeypatch, tmp_path):
+    monkeypatch.setenv('APP_DATA_DIR', str(tmp_path / 'data'))
+    coords = {'cx': 48, 'cy': 47, 'radius': 29, 'width': 96, 'height': 96}
+    with TestClient(create_app()) as client:
+        token = admin(client)
+        denied = client.post('/api/stations/calibration/single', json={
+            'calibration': coords,
+        })
+        assert denied.status_code == 403
+        saved = client.post('/api/stations/calibration/single', json={
+            'calibration': coords, 'admin_token': token,
+        })
+        assert saved.status_code == 200, saved.text
+        assert saved.json()['single_calibration'] == coords
+        profile = client.get('/api/stations/profile').json()
+        assert profile['single_calibration'] == coords
+    with TestClient(create_app()) as reopened:
+        assert reopened.get('/api/stations/profile').json()['single_calibration'] == coords
