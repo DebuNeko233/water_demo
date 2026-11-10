@@ -27,6 +27,15 @@ test('normal monitor UI omits redundant prose while preserving useful controls',
   for (const essential of [
     '标注晶圆位置', '重新标注', '打开视频', 'S_water', 'NG 阈值',
     '导出检测结果', '确认', '系统设置', 'videoError', 'calibrationPhase',
+    '开始检测', '停止检测', '异常谱线', '视频参数',
   ]) assert.ok(app.includes(essential), 'Essential UI text missing: ' + essential)
   assert.match(app, /v-if="resultStatus === 'ERROR' \|\| resultStatus === '连接中' \|\| resultStatus === 'WARMUP' \|\| resultStatus === 'PAUSED'"/)
+  assert.ok(!app.includes('S_water 历史曲线'))
+  assert.ok(!app.includes('从头播放'))
+  assert.ok(!app.includes('暂停显示'))
+  assert.ok(!app.includes('暂停播放'))
+  assert.ok(!app.includes('检测区域'))
+  assert.ok(!app.includes('<div class="data-label">S_water</div>'))
+  assert.ok(!app.includes('<div class="data-label">NG 阈值</div>'))
+  assert.match(app, /<span>视频参数<\/span><strong :title="sourceLabel">\{\{ sourceLabel \}\}<\/strong>/)
 })
