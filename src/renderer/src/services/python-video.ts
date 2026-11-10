@@ -18,6 +18,8 @@ export interface VideoStreamSession {
   duration_s: number
   frame_count: number
   stage_mode: StageMode
+  is_live: boolean
+  source_kind: 'file' | 'rtsp' | 'usb'
   frame: AnnotatedFrame
 }
 export function openPythonVideo(
