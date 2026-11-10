@@ -59,7 +59,7 @@ class VideoOpenInput(BaseModel):
     start_time_s: float = Field(default=0.0, ge=0.0, le=86400, allow_inf_nan=False)
     detector: DetectorSettings | None = None
     admin_token: str | None = Field(default=None, max_length=128)
-    stage_mode: Literal['single', 'auto'] = 'single'
+    stage_mode: Literal['single', 'auto', 'configured'] = 'single'
     detecting: bool = True  # Existing direct API clients keep inference on.
 
 
@@ -97,6 +97,7 @@ class PythonVideoStream:
         self._station_match_threshold = 0.78
         self._history: deque[dict] = deque(maxlen=1500)
         self._mode = 'single'
+        self._fixed_stage = 'P1'
         self._recognizer: ReferencePositionRecognizer | None = None
         self._stage_calibrations: dict[str, dict] = {}
         self._active_stage: str | None = None
@@ -205,11 +206,22 @@ class PythonVideoStream:
             cfg = DemoConfig(**approved.model_dump(exclude={'station_match_threshold'}))
             stage_profile = None
             recognizer = None
-            if req.stage_mode == 'auto':
+            mode = req.stage_mode
+            fixed_stage = 'P1'
+            if req.stage_mode in ('auto', 'configured'):
                 if self._profile is None:
-                    raise InvalidFrame('三工位参考帧配置尚未初始化')
+                    raise InvalidFrame('工位配置尚未初始化')
                 stage_profile, recognizer = self._profile.build(width, height)
-                recognizer.threshold = approved.station_match_threshold
+                enabled = stage_profile['enabled_stages']
+                fixed_stage = enabled[0]
+                # The stored per-station ROI is authoritative in unified mode.
+                # Never use a stale or arbitrary client-provided ROI.
+                if req.stage_mode == 'configured':
+                    cal = CalibrationInput.model_validate(
+                        stage_profile['stages'][fixed_stage]['calibration'])
+                mode = 'auto' if recognizer is not None else 'single'
+                if recognizer is not None:
+                    recognizer.threshold = approved.station_match_threshold
             detector = RoiWaterDetector((height, width), fps,
                                      Calibration(cal.cx, cal.cy, cal.radius), cfg)
             with self._lock:
@@ -234,7 +246,8 @@ class PythonVideoStream:
                 self._live_overlay_result = None
                 self._config = cfg
                 self._station_match_threshold = approved.station_match_threshold
-                self._mode = req.stage_mode
+                self._mode = mode
+                self._fixed_stage = fixed_stage
                 self._recognizer = recognizer
                 self._stage_calibrations = (stage_profile['stages'] if stage_profile else {})
                 if not live:
@@ -493,7 +506,7 @@ class PythonVideoStream:
         t = index / self._fps
         # The recognizer never edits the frame. The canonical WaterDetector
         # still processes the original full-FPS decoded BGR image.
-        stage, confidence, scores, reason = ('P1', 1.0, {}, '')
+        stage, confidence, scores, reason = (self._fixed_stage, 1.0, {}, '')
         if not self._detecting:
             reason = 'DETECTION_STOPPED'
         elif self._mode == 'auto':
