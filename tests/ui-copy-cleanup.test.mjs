@@ -33,7 +33,7 @@ test('normal monitor UI omits redundant prose while preserving useful controls',
   assert.ok(!app.includes('S_water 历史曲线'))
   assert.ok(!app.includes('从头播放'))
   assert.ok(!app.includes('暂停显示'))
-  assert.ok(!app.includes('暂停播放'))
+  assert.ok(app.includes('暂停播放'))
   assert.ok(!app.includes('检测区域'))
   assert.ok(!app.includes('<div class="data-label">S_water</div>'))
   assert.ok(!app.includes('<div class="data-label">NG 阈值</div>'))
