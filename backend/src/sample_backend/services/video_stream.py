@@ -68,6 +68,7 @@ class PythonVideoStream:
         self._candidate_count = 0
         self._source_kind = 'file'
         self._last_raw_frame = None
+        self._probe_frame = None
         self._live_cv = threading.Condition(self._lock)
         self._live_thread: threading.Thread | None = None
         self._live_stop = False
@@ -81,6 +82,7 @@ class PythonVideoStream:
         self._live_cv.notify_all()
         self._live_packet = None
         self._last_raw_frame = None
+        self._probe_frame = None
         if self._cap is not None:
             self._cap.release()
         self._cap = None
@@ -108,6 +110,12 @@ class PythonVideoStream:
         try:
             width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            first_frame = None
+            if live:
+                ok, first_frame = cap.read()
+                if not ok or first_frame is None:
+                    raise InvalidFrame('摄像头无法读取画面')
+                height, width = first_frame.shape[:2]
             fps = float(cap.get(cv2.CAP_PROP_FPS))
             frame_count = max(0, int(cap.get(cv2.CAP_PROP_FRAME_COUNT)))
             cal = req.calibration
@@ -143,6 +151,7 @@ class PythonVideoStream:
                 self._duration = frame_count / fps if frame_count and not live else 0.0
                 self._frame_count = frame_count if not live else 0
                 self._source_kind = settings.kind
+                self._probe_frame = first_frame
                 self._live_stop = False
                 self._live_error = ''
                 self._live_serial = 0
@@ -329,7 +338,12 @@ class PythonVideoStream:
 
     def _next_locked(self) -> dict:
         assert self._cap is not None
-        ok, frame = self._cap.read()
+        if self._probe_frame is not None:
+            frame = self._probe_frame
+            self._probe_frame = None
+            ok = True
+        else:
+            ok, frame = self._cap.read()
         if not ok or frame is None:
             return {'ended': True}
         self._last_raw_frame = frame.copy()
