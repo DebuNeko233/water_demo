@@ -18,9 +18,10 @@ import cv2
 from pydantic import BaseModel, Field
 from typing import Literal
 
-from .frame_renderer import render_detection_frame
+from .frame_renderer import render_detection_frame, resize_display_frame
+from .roi_detector import RoiWaterDetector
 from .station_position import STAGES, StageProfileStore, ReferencePositionRecognizer
-from .water_detection import Calibration, DemoConfig, WaterDetector
+from .water_detection import Calibration, DemoConfig
 from .water_session import CalibrationInput, DetectorSettings, InvalidFrame, SessionExpired
 from .video_source import VideoSourceSettings, open_capture
 
@@ -74,7 +75,7 @@ class PythonVideoStream:
         self._profile = profile
         self._lock = threading.RLock()
         self._cap: cv2.VideoCapture | None = None
-        self._detector: WaterDetector | None = None
+        self._detector: RoiWaterDetector | None = None
         self._id: str | None = None
         self._fps = 0.0
         self._frame_count = 0
@@ -166,7 +167,7 @@ class PythonVideoStream:
                     raise InvalidFrame('三工位参考帧配置尚未初始化')
                 stage_profile, recognizer = self._profile.build(width, height)
                 recognizer.threshold = approved.station_match_threshold
-            detector = WaterDetector((height, width), fps,
+            detector = RoiWaterDetector((height, width), fps,
                                      Calibration(cal.cx, cal.cy, cal.radius), cfg)
             with self._lock:
                 self._close()
@@ -250,7 +251,7 @@ class PythonVideoStream:
         else:
             assert self._detector is not None
             old = self._detector
-            self._detector = WaterDetector((self._height, self._width), self._fps,
+            self._detector = RoiWaterDetector((self._height, self._width), self._fps,
                                            old.calib, self._config)
         self._history.clear()
 
@@ -358,7 +359,7 @@ class PythonVideoStream:
         if self._candidate_count < 3:
             return candidate, confidence, scores, 'POSITION_UNSTABLE'
         cal = self._stage_calibrations[candidate]['calibration']
-        self._detector = WaterDetector((self._height, self._width), self._fps,
+        self._detector = RoiWaterDetector((self._height, self._width), self._fps,
                                        Calibration(cal['cx'], cal['cy'], cal['radius']),
                                        self._config)
         self._active_stage = candidate
@@ -374,7 +375,7 @@ class PythonVideoStream:
             ok, frame = self._cap.read()
         if not ok or frame is None:
             return {'ended': True}
-        self._last_raw_frame = frame.copy()
+        self._last_raw_frame = frame
         index = self._next_index
         self._next_index += 1
         t = index / self._fps
@@ -385,13 +386,13 @@ class PythonVideoStream:
             stage, confidence, scores, reason = self._auto_select(frame)
         if reason:
             data = None
-            annotated = frame
+            annotated = resize_display_frame(frame)
         else:
             assert self._detector is not None
             data = self._detector.process(frame)
             annotated = render_detection_frame(frame, self._detector, data)
         ok_jpeg, encoded = cv2.imencode('.jpg', annotated,
-                                        [cv2.IMWRITE_JPEG_QUALITY, 84])
+                                        [cv2.IMWRITE_JPEG_QUALITY, 76])
         if not ok_jpeg:
             raise InvalidFrame('Cannot encode annotated preview')
         if data is not None:
