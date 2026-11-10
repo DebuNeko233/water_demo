@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from sample_backend.services.profile_archive import export_profile_archive, import_profile_archive
 from sample_backend.services.station_position import (
     StageCalibrationInput, StageReferenceInput, StageRemoveReferenceInput,
-    StageLiveReferenceInput, SingleCalibrationInput,
+    StageLiveReferenceInput, SingleCalibrationInput, StageEnabledInput,
 )
 from sample_backend.services.water_session import InvalidFrame, WaterDetectionSession
 from sample_backend.services.user_access import AccessDenied
@@ -23,6 +23,20 @@ def save_single_calibration(req: SingleCalibrationInput, request: Request) -> di
     try:
         request.app.state.user_access.require_admin(req.admin_token)
         return request.app.state.station_profile.save_single(req.calibration)
+    except AccessDenied as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+    except (InvalidFrame, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post('/enabled')
+def set_station_enabled(req: StageEnabledInput, request: Request) -> dict:
+    try:
+        request.app.state.user_access.require_admin(req.admin_token)
+        profile = request.app.state.station_profile.set_enabled(req)
+        # An existing stream must not continue with now-disabled stations.
+        request.app.state.video_stream.close()
+        return profile
     except AccessDenied as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
     except (InvalidFrame, ValueError) as exc:
