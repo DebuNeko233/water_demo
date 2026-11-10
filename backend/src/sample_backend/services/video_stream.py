@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import math
 import threading
+import time
 from collections import deque
 from pathlib import Path
 from uuid import uuid4
@@ -21,12 +22,13 @@ from .frame_renderer import render_detection_frame
 from .station_position import STAGES, StageProfileStore, ReferencePositionRecognizer
 from .water_detection import Calibration, DemoConfig, WaterDetector
 from .water_session import CalibrationInput, DetectorSettings, InvalidFrame, SessionExpired
+from .video_source import VideoSourceSettings, open_capture
 
 VIDEO_SUFFIXES = {'.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v'}
 
 
 class VideoOpenInput(BaseModel):
-    file_path: str = Field(min_length=1, max_length=4096)
+    file_path: str = Field(default='', max_length=4096)
     calibration: CalibrationInput
     start_time_s: float = Field(default=0.0, ge=0.0, le=86400, allow_inf_nan=False)
     detector: DetectorSettings | None = None
@@ -64,8 +66,21 @@ class PythonVideoStream:
         self._active_stage: str | None = None
         self._candidate_stage: str | None = None
         self._candidate_count = 0
+        self._source_kind = 'file'
+        self._last_raw_frame = None
+        self._live_cv = threading.Condition(self._lock)
+        self._live_thread: threading.Thread | None = None
+        self._live_stop = False
+        self._live_packet: dict | None = None
+        self._live_serial = 0
+        self._live_served = 0
+        self._live_error = ''
 
     def _close(self) -> None:
+        self._live_stop = True
+        self._live_cv.notify_all()
+        self._live_packet = None
+        self._last_raw_frame = None
         if self._cap is not None:
             self._cap.release()
         self._cap = None
@@ -86,16 +101,10 @@ class PythonVideoStream:
         if sid != self._id or self._cap is None:
             raise SessionExpired('Python video session expired; reopen the file')
 
-    def open(self, req: VideoOpenInput) -> dict:
-        source = Path(req.file_path)
-        if source.suffix.lower() not in VIDEO_SUFFIXES or not source.is_file():
-            raise InvalidFrame('Cannot open video file or unsupported video format')
-        # Do not follow special pipes/devices; only regular files selected by user.
-        if not source.is_file():
-            raise InvalidFrame('Video source must be a regular file')
-        cap = cv2.VideoCapture(str(source))
-        if not cap.isOpened():
-            raise InvalidFrame('OpenCV cannot decode this video')
+    def open(self, req: VideoOpenInput, source_settings: VideoSourceSettings | None = None) -> dict:
+        settings = source_settings or VideoSourceSettings()
+        cap = open_capture(settings, req.file_path)
+        live = settings.kind != 'file'
         try:
             width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -106,7 +115,10 @@ class PythonVideoStream:
                     or width <= 0 or height <= 0 or width * height > 4_194_304):
                 raise InvalidFrame('Video dimensions differ from wafer calibration or are too large')
             if not math.isfinite(fps) or not 1 <= fps <= 240:
-                raise InvalidFrame('Unable to determine source video FPS')
+                if live:
+                    fps = 30.0  # Fallback when the camera driver omits FPS.
+                else:
+                    raise InvalidFrame('Unable to determine source video FPS')
             # API route resolves the approved, persistent settings; direct
             # callers without an override use original DemoConfig defaults.
             approved = req.detector or DetectorSettings()
@@ -128,16 +140,37 @@ class PythonVideoStream:
                 self._width, self._height = width, height
                 self._fps = fps
                 self._frame_count = frame_count
-                self._duration = frame_count / fps if frame_count else 0.0
+                self._duration = frame_count / fps if frame_count and not live else 0.0
+                self._frame_count = frame_count if not live else 0
+                self._source_kind = settings.kind
+                self._live_stop = False
+                self._live_error = ''
+                self._live_serial = 0
+                self._live_served = 0
+                self._live_packet = None
                 self._config = cfg
                 self._station_match_threshold = approved.station_match_threshold
                 self._mode = req.stage_mode
                 self._recognizer = recognizer
                 self._stage_calibrations = (stage_profile['stages'] if stage_profile else {})
-                self._seek_capture(req.start_time_s)
+                if not live:
+                    self._seek_capture(req.start_time_s)
+                else:
+                    self._next_index = 0
+                    self._history.clear()
+                    if self._mode == 'auto':
+                        self._detector = None
                 packet = self._next_locked()
                 if packet['ended']:
-                    raise InvalidFrame('Video contains no decodable frames')
+                    raise InvalidFrame('视频源无法读取第一帧')
+                if live:
+                    self._live_packet = packet
+                    self._live_serial = 1
+                    self._live_served = 1
+                    thread = threading.Thread(target=self._live_loop, args=(self._id,),
+                                              name='ZeboVision-LiveCapture', daemon=True)
+                    self._live_thread = thread
+                    thread.start()
                 return self._session_info() | {'frame': packet}
         except Exception:
             with self._lock:
@@ -156,10 +189,13 @@ class PythonVideoStream:
                 'sector_count': self._config.sector_count,
                 'inner_radius_ratio': self._config.inner_radius_ratio,
                 'outer_radius_ratio': self._config.outer_radius_ratio,
-                'stage_mode': self._mode,
+                'stage_mode': self._mode, 'source_kind': self._source_kind,
+                'is_live': self._source_kind != 'file',
                 'station_match_threshold': self._station_match_threshold}
 
     def _seek_capture(self, time_s: float) -> None:
+        if self._source_kind != 'file':
+            raise InvalidFrame('实时摄像头不支持进度条或时间跳转')
         assert self._cap is not None
         index = max(0, int(round(time_s * self._fps)))
         if self._frame_count:
@@ -188,9 +224,59 @@ class PythonVideoStream:
             return self._next_locked()
 
     def next(self, req: VideoNextInput) -> dict:
-        with self._lock:
+        with self._live_cv:
             self._verify(req.session_id)
+            if self._source_kind != 'file':
+                deadline = time.monotonic() + 5.0
+                while (self._live_serial <= self._live_served and not self._live_error
+                       and time.monotonic() < deadline):
+                    self._live_cv.wait(timeout=max(0.0, deadline - time.monotonic()))
+                    self._verify(req.session_id)
+                if self._live_error:
+                    raise InvalidFrame(self._live_error)
+                if self._live_packet is None or self._live_serial <= self._live_served:
+                    raise InvalidFrame('等待实时画面超时，请检查摄像头连接')
+                self._live_served = self._live_serial
+                return self._live_packet
             return self._next_locked()
+
+    def _live_loop(self, session_id: str | None) -> None:
+        """Analyze every decoded live frame; renderer sees only the latest."""
+        while True:
+            started = time.monotonic()
+            with self._live_cv:
+                if self._live_stop or self._id != session_id:
+                    return
+                try:
+                    packet = self._next_locked()
+                    if packet['ended']:
+                        raise InvalidFrame('实时视频源已断开')
+                except Exception:
+                    self._live_error = '实时视频源读取失败，请检查连接并重新连接'
+                    self._live_cv.notify_all()
+                    return
+                self._live_packet = packet
+                self._live_serial += 1
+                self._live_cv.notify_all()
+            # Some virtual camera drivers return instantly and would spin.
+            elapsed = time.monotonic() - started
+            time.sleep(max(0.0, 1.0 / max(1.0, self._fps) - elapsed))
+
+    def snapshot_raw(self, source: VideoSourceSettings):
+        """Capture the latest camera image for calibration or reference saving."""
+        if source.kind == 'file':
+            raise InvalidFrame('本地视频请使用文件标注')
+        with self._lock:
+            if self._source_kind == source.kind and self._last_raw_frame is not None:
+                return self._last_raw_frame.copy()
+        cap = open_capture(source)
+        try:
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                raise InvalidFrame('摄像头当前画面读取失败')
+            return frame
+        finally:
+            cap.release()
 
     def _paused_result(self, stage: str, reason: str, confidence: float,
                        scores: dict[str, float], time_s: float, index: int) -> dict:
@@ -244,8 +330,9 @@ class PythonVideoStream:
     def _next_locked(self) -> dict:
         assert self._cap is not None
         ok, frame = self._cap.read()
-        if not ok:
+        if not ok or frame is None:
             return {'ended': True}
+        self._last_raw_frame = frame.copy()
         index = self._next_index
         self._next_index += 1
         t = index / self._fps
