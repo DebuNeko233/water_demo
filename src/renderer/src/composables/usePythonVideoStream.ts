@@ -25,6 +25,8 @@ export function usePythonVideoStream() {
   const sourceFrameRate = ref(0)
   const currentTime = ref(0)
   const duration = ref(0)
+  const isLive = ref(false)
+  const sourceKind = ref<'file' | 'rtsp' | 'usb'>('file')
   const videoWidth = ref(0)
   const videoHeight = ref(0)
   const isPlaying = ref(false)
@@ -49,6 +51,8 @@ export function usePythonVideoStream() {
     status.value = 'idle'
     result.value = null
     records.value = []
+    isLive.value = false
+    sourceKind.value = 'file'
     renderedFrame.value = ''
     error.value = ''
   }
@@ -68,6 +72,7 @@ export function usePythonVideoStream() {
     result.value = packet.result
     currentTime.value = packet.time_s
     records.value.push(packet.result)
+    if (isLive.value && records.value.length > 3000) records.value.splice(0, 1000)
     status.value = packet.result.history_ready ? 'running' : 'warming'
     error.value = ''
   }
@@ -137,6 +142,8 @@ export function usePythonVideoStream() {
       sessionId = session.session_id
       sourceFrameRate.value = session.fps
       duration.value = session.duration_s
+      isLive.value = session.is_live
+      sourceKind.value = session.source_kind
       videoWidth.value = session.width
       videoHeight.value = session.height
       await showFrame(session.frame, epoch)
@@ -150,7 +157,7 @@ export function usePythonVideoStream() {
 
   async function seek(timeS: number, resume = isPlaying.value): Promise<void> {
     const sid = sessionId
-    if (!sid) return
+    if (!sid || isLive.value) return
     pause()
     version += 1
     const epoch = version
@@ -202,7 +209,7 @@ export function usePythonVideoStream() {
   onBeforeUnmount(invalidate)
   return {
     status, result, error, records, renderedFrame, sourceFrameRate,
-    currentTime, duration, videoWidth, videoHeight, isPlaying,
+    currentTime, duration, isLive, sourceKind, videoWidth, videoHeight, isPlaying,
     open, seek, play, pause, invalidate, exportCSV,
   }
 }
