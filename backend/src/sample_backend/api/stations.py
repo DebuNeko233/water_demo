@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from sample_backend.services.profile_archive import export_profile_archive, import_profile_archive
 from sample_backend.services.station_position import (
     StageCalibrationInput, StageReferenceInput, StageRemoveReferenceInput,
-    StageLiveReferenceInput,
+    StageLiveReferenceInput, SingleCalibrationInput,
 )
 from sample_backend.services.water_session import InvalidFrame, WaterDetectionSession
 from sample_backend.services.user_access import AccessDenied
@@ -16,6 +16,17 @@ router = APIRouter(prefix='/api/stations')
 @router.get('/profile')
 def profile(request: Request) -> dict:
     return request.app.state.station_profile.snapshot()
+
+
+@router.post('/calibration/single')
+def save_single_calibration(req: SingleCalibrationInput, request: Request) -> dict:
+    try:
+        request.app.state.user_access.require_admin(req.admin_token)
+        return request.app.state.station_profile.save_single(req.calibration)
+    except AccessDenied as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+    except (InvalidFrame, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post('/calibration')
