@@ -281,53 +281,61 @@ class PythonVideoStream:
                 if self._live_packet is None or self._live_serial <= self._live_served:
                     raise InvalidFrame('等待实时画面超时，请检查摄像头连接')
                 self._live_served = self._live_serial
-                # Encode only frames the UI actually requests. A camera may
-                # produce 30+ FPS while the display is paused or capped.
+                # Snapshot a consistent analyzed image/ROI under the lock,
+                # but JPEG encoding happens outside it. Otherwise the camera
+                # cannot process the next source frame while the UI is served.
                 packet = dict(self._live_packet)
-                started = time.perf_counter()
-                packet['jpeg_base64'] = self._encode_preview(
-                    self._last_raw_frame, self._detector, self._live_overlay_result)
-                packet['performance'] = {
-                    **packet['performance'],
-                    'preview_ms': round((time.perf_counter() - started) * 1000, 2),
-                }
-                return packet
-            if req.batch_frames == 1:
-                return self._next_locked()
-            # On HD files, sending one JSON+JPEG per decoded frame is often
-            # slower than inference itself. Preserve all temporal samples but
-            # only annotate and encode the last frame in this batch.
-            packet = None
-            intermediate = []
-            total_decode_ms = 0.0
-            total_analysis_ms = 0.0
-            count = 0
-            for _ in range(req.batch_frames):
-                candidate = self._next_locked(with_preview=False)
-                if candidate['ended']:
-                    break
-                if packet is not None:
-                    sample = dict(packet['result'])
-                    sample['history'] = []  # Only current frame needs chart.
-                    intermediate.append(sample)
-                packet = candidate
-                cost = candidate['performance']
-                total_decode_ms += cost['decode_ms']
-                total_analysis_ms += cost['analysis_ms']
-                count += 1
-            if packet is None:
-                return {'ended': True}
-            start_preview = time.perf_counter()
-            packet['jpeg_base64'] = self._encode_preview(
-                self._last_raw_frame, self._detector, self._live_overlay_result)
-            packet['performance'] = {
-                'frames': count,
-                'decode_ms': round(total_decode_ms / count, 2),
-                'analysis_ms': round(total_analysis_ms / count, 2),
-                'preview_ms': round((time.perf_counter() - start_preview) * 1000, 2),
-            }
-            packet['samples'] = intermediate
-            return packet
+                frame = self._last_raw_frame
+                detector = self._detector
+                overlay = self._live_overlay_result
+            else:
+                return self._next_file_locked(req)
+
+        started = time.perf_counter()
+        packet['jpeg_base64'] = self._encode_preview(frame, detector, overlay)
+        packet['performance'] = {
+            **packet['performance'],
+            'preview_ms': round((time.perf_counter() - started) * 1000, 2),
+        }
+        return packet
+
+    def _next_file_locked(self, req: VideoNextInput) -> dict:
+        if req.batch_frames == 1:
+            return self._next_locked()
+        # On HD files, sending one JSON+JPEG per decoded frame is often
+        # slower than inference itself. Preserve all temporal samples but
+        # only annotate and encode the last frame in this batch.
+        packet = None
+        intermediate = []
+        total_decode_ms = 0.0
+        total_analysis_ms = 0.0
+        count = 0
+        for _ in range(req.batch_frames):
+            candidate = self._next_locked(with_preview=False)
+            if candidate['ended']:
+                break
+            if packet is not None:
+                sample = dict(packet['result'])
+                sample['history'] = []  # Only current frame needs chart.
+                intermediate.append(sample)
+            packet = candidate
+            cost = candidate['performance']
+            total_decode_ms += cost['decode_ms']
+            total_analysis_ms += cost['analysis_ms']
+            count += 1
+        if packet is None:
+            return {'ended': True}
+        start_preview = time.perf_counter()
+        packet['jpeg_base64'] = self._encode_preview(
+            self._last_raw_frame, self._detector, self._live_overlay_result)
+        packet['performance'] = {
+            'frames': count,
+            'decode_ms': round(total_decode_ms / count, 2),
+            'analysis_ms': round(total_analysis_ms / count, 2),
+            'preview_ms': round((time.perf_counter() - start_preview) * 1000, 2),
+        }
+        packet['samples'] = intermediate
+        return packet
 
     def _live_loop(self, session_id: str | None) -> None:
         """Analyze every decoded live frame; renderer sees only the latest."""
