@@ -80,6 +80,13 @@ export function usePythonVideoStream() {
     error.value = ''
   }
 
+  function displayFrameRate(): number {
+    // A camera still analyzes every source frame in Python. Only the UI
+    // preview is limited to 20 FPS to avoid oversized IPC/JPEG/DOM churn.
+    const fps = sourceFrameRate.value
+    return Math.max(1, isLive.value ? Math.min(20, fps) : fps)
+  }
+
   function play(): void {
     if (isPlaying.value || !sessionId || status.value === 'error' || status.value === 'connecting') return
     if (reachedEnd) {
@@ -87,7 +94,7 @@ export function usePythonVideoStream() {
       return
     }
     isPlaying.value = true
-    schedule(version, 1000 / Math.max(1, sourceFrameRate.value))
+    schedule(version, 1000 / displayFrameRate())
   }
 
   function schedule(expectedVersion: number, delayMs: number): void {
@@ -114,7 +121,7 @@ export function usePythonVideoStream() {
         return
       }
       await showFrame(packet, expectedVersion)
-      schedule(expectedVersion, 1000 / Math.max(1, sourceFrameRate.value) - (performance.now() - started))
+      schedule(expectedVersion, 1000 / displayFrameRate() - (performance.now() - started))
     } catch (reason) {
       if (version !== expectedVersion) return
       pause()
