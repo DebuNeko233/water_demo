@@ -335,6 +335,7 @@ async function refreshLiveSnapshot(): Promise<void> {
 }
 
 async function onFileChange(event: Event): Promise<void> {
+  if (isLiveVideo.value) return
   const file = (event.target as HTMLInputElement).files?.[0]
   if (!file) return
   if (!file.type.startsWith('video/') && !/\.(mp4|mov|avi|mkv|webm|m4v)$/i.test(file.name)) {
@@ -869,6 +870,12 @@ async function applyVideoSourceSettings(next: VideoSourceSettings): Promise<void
     algorithmSettingsOpen.value = false
     settingsResumePlayback = false
     detection.invalidate()
+    if (activeUrl.value) URL.revokeObjectURL(activeUrl.value)
+    if (pendingUrl.value) URL.revokeObjectURL(pendingUrl.value)
+    activeUrl.value = ''
+    pendingUrl.value = ''
+    pendingVideoPath.value = ''
+    pendingFile.value = null
     activeVideoPath.value = ''
     activeName.value = ''
     seekDraft.value = null
@@ -1049,7 +1056,7 @@ onBeforeUnmount(() => {
             </div>
             <div v-if="currentStageReferences.length" class="station-reference-list">
               <span v-for="refItem in currentStageReferences" :key="refItem.id" class="station-reference-chip">
-                {{ refItem.source }} · {{ formatTime(refItem.time_s) }}
+                {{ refItem.source }} · {{ refItem.source.endsWith('camera') ? '实时抓拍' : formatTime(refItem.time_s) }}
                 <button type="button" :disabled="stationBusy" :aria-label="'删除' + selectedStation + '参考帧'" @click="deleteCurrentReference(refItem.id)">×</button>
               </span>
             </div>
