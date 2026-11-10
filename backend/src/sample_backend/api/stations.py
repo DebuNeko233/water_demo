@@ -3,8 +3,6 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from sample_backend.services.profile_archive import export_profile_archive, import_profile_archive
-from sample_backend.services.user_access import AccessDenied
-
 from sample_backend.services.station_position import (
     StageCalibrationInput, StageReferenceInput, StageRemoveReferenceInput,
 )
