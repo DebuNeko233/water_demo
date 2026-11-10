@@ -102,3 +102,10 @@
 /* A four-metric 2x2 grid fills the available panel without vacant rows. */
 .data-panel .data-grid{flex:1;grid-template-rows:repeat(2,minmax(0,1fr))}
 .data-panel .metric{display:flex;flex-direction:column;justify-content:center}
+
+/* A station tab and its on/off control are separate actions. */
+.station-tab-item{display:flex;align-items:center;gap:9px;border:1px solid #28445b;border-radius:7px;padding:5px 9px 5px 5px;background:#0b2234}
+.station-tabs .station-tab-item>button{min-width:58px}
+.station-enabled-switch{display:flex;align-items:center;gap:5px;color:#a8c6d8;font-size:11px;cursor:pointer;white-space:nowrap}
+.station-enabled-switch input{width:15px;height:15px;accent-color:#33b6ed;cursor:pointer;margin:0}
+.station-enabled-switch:has(input:disabled){opacity:.55;cursor:not-allowed}
