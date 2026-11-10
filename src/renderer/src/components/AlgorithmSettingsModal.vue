@@ -1,27 +1,60 @@
 <script setup lang="ts">
-import { computed, reactive } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import {
   ALGORITHM_GROUPS, DEFAULT_ALGORITHM_SETTINGS, copyAlgorithmSettings,
   validateAlgorithmSettings,
   type AlgorithmSettings,
 } from '../utils/algorithm-settings.mjs'
+import {
+  DEFAULT_VIDEO_SOURCE, type VideoSourceSettings,
+} from '../services/video-source'
 
-const props = defineProps<{ settings: AlgorithmSettings }>()
+type SettingsTab = 'parameters' | 'source' | 'device'
+const props = defineProps<{
+  settings: AlgorithmSettings
+  source: VideoSourceSettings
+  busy?: boolean
+}>()
 const emit = defineEmits<{
   (event: 'cancel'): void
   (event: 'save', value: AlgorithmSettings): void
+  (event: 'saveSource', value: VideoSourceSettings): void
+  (event: 'importProfile'): void
+  (event: 'exportProfile'): void
 }>()
+const activeTab = ref<SettingsTab>('parameters')
 const draft = reactive<AlgorithmSettings>(copyAlgorithmSettings(props.settings))
+const sourceDraft = reactive<VideoSourceSettings>({ ...props.source })
 const error = computed(() => validateAlgorithmSettings(draft))
-// 暂时隐藏该分组的编辑控件，不删除设置项或改变 Python 检测器参数。
+const sourceError = computed(() => {
+  if (sourceDraft.kind === 'rtsp') {
+    if (!/^rtsp:\/\/[^/\s]+/i.test(sourceDraft.rtsp_url)) return '请输入 RTSP 视频地址'
+  }
+  if (!Number.isInteger(sourceDraft.usb_index) ||
+      sourceDraft.usb_index < 0 || sourceDraft.usb_index > 15) {
+    return 'USB 设备编号须为 0～15 的整数'
+  }
+  return ''
+})
+// Keep the existing hidden-image settings policy.
 const visibleAlgorithmGroups = ALGORITHM_GROUPS.filter(group => group.title !== '图像与时序')
+
+watch(() => props.source, next => Object.assign(sourceDraft, next))
+watch(() => props.settings, next => Object.assign(draft, copyAlgorithmSettings(next)))
 
 function defaults(): void {
   Object.assign(draft, DEFAULT_ALGORITHM_SETTINGS)
 }
+function sourceDefaults(): void {
+  Object.assign(sourceDraft, DEFAULT_VIDEO_SOURCE)
+}
 function save(): void {
   if (error.value) return
   emit('save', copyAlgorithmSettings(draft))
+}
+function saveSource(): void {
+  if (sourceError.value) return
+  emit('saveSource', { ...sourceDraft })
 }
 </script>
 
@@ -29,30 +62,26 @@ function save(): void {
   <div class="algorithm-mask" @click.self="emit('cancel')">
     <section class="algorithm-dialog" role="dialog" aria-modal="true" aria-labelledby="algorithm-dialog-title">
       <header class="algorithm-dialog-head">
-        <div>
-          <h2 id="algorithm-dialog-title">算法参数设置</h2>
-        </div>
+        <div><h2 id="algorithm-dialog-title">系统设置</h2></div>
         <button type="button" class="modal-close" title="关闭设置" aria-label="关闭设置" @click="emit('cancel')">×</button>
       </header>
-      <form class="algorithm-form" @submit.prevent="save">
+      <nav class="settings-tabs" role="tablist" aria-label="设置类别">
+        <button type="button" role="tab" :aria-selected="activeTab === 'parameters'" :class="{ active: activeTab === 'parameters' }" @click="activeTab = 'parameters'">检测参数</button>
+        <button type="button" role="tab" :aria-selected="activeTab === 'source'" :class="{ active: activeTab === 'source' }" @click="activeTab = 'source'">视频源</button>
+        <button type="button" role="tab" :aria-selected="activeTab === 'device'" :class="{ active: activeTab === 'device' }" @click="activeTab = 'device'">设备配置</button>
+      </nav>
+
+      <form v-if="activeTab === 'parameters'" class="algorithm-form" @submit.prevent="save">
         <div class="algorithm-scroll">
           <section v-for="group in visibleAlgorithmGroups" :key="group.title" class="algorithm-section">
-            <div class="algorithm-section-title">
-              <strong>{{ group.title }}</strong>
-            </div>
+            <div class="algorithm-section-title"><strong>{{ group.title }}</strong></div>
             <div class="algorithm-fields">
               <label v-for="field in group.fields" :key="field.key" class="algorithm-field">
                 <span class="algorithm-field-label">{{ field.label }}</span>
                 <span class="algorithm-field-input">
-                  <input
-                    v-model.number="draft[field.key]"
-                    type="number"
-                    :min="field.min"
-                    :max="field.max"
-                    :step="field.step"
-                    :aria-label="field.label"
-                    required
-                  />
+                  <input v-model.number="draft[field.key]" type="number"
+                    :min="field.min" :max="field.max" :step="field.step"
+                    :aria-label="field.label" required />
                   <small v-if="field.unit">{{ field.unit }}</small>
                 </span>
               </label>
@@ -60,14 +89,61 @@ function save(): void {
           </section>
         </div>
         <footer class="algorithm-dialog-foot">
-          <button type="button" class="btn btn-muted" @click="defaults">恢复默认</button>
+          <button type="button" class="btn btn-muted" :disabled="busy" @click="defaults">恢复默认</button>
           <div class="algorithm-foot-right">
             <span v-if="error" class="algorithm-error" role="alert">{{ error }}</span>
             <button type="button" class="btn btn-muted" @click="emit('cancel')">取消</button>
-            <button type="submit" class="btn btn-primary" :disabled="!!error">保存并应用</button>
+            <button type="submit" class="btn btn-primary" :disabled="!!error || busy">保存并应用</button>
           </div>
         </footer>
       </form>
+
+      <form v-else-if="activeTab === 'source'" class="algorithm-form" @submit.prevent="saveSource">
+        <div class="algorithm-scroll">
+          <div class="source-kind-options" role="group" aria-label="视频源类型">
+            <label><input v-model="sourceDraft.kind" type="radio" value="file" /> 本地视频</label>
+            <label><input v-model="sourceDraft.kind" type="radio" value="rtsp" /> RTSP 摄像头</label>
+            <label><input v-model="sourceDraft.kind" type="radio" value="usb" /> USB 摄像头</label>
+          </div>
+          <div v-if="sourceDraft.kind === 'rtsp'" class="source-field">
+            <label for="source-rtsp-url">RTSP 地址</label>
+            <input id="source-rtsp-url" v-model.trim="sourceDraft.rtsp_url" type="text" spellcheck="false"
+              autocomplete="off" placeholder="rtsp://192.168.1.66:554/..." />
+            <p>连接摄像头后自动检测；地址只保存在本机，不写入设备配置 ZIP。</p>
+          </div>
+          <div v-else-if="sourceDraft.kind === 'usb'" class="source-field">
+            <label for="source-usb-index">USB 摄像头编号</label>
+            <input id="source-usb-index" v-model.number="sourceDraft.usb_index" type="number" min="0" max="15" step="1" />
+            <p>通常从 0 开始；有多个摄像头时依次尝试 1、2、3。</p>
+          </div>
+          <div v-else class="source-field">
+            <p>使用本地 MP4、AVI 等视频文件，可拖动进度条、暂停和跳转。</p>
+          </div>
+          <p v-if="sourceDraft.kind !== 'file'" class="source-field-help">RTSP/USB 使用实时画面，不显示播放进度条。摄像头分辨率必须与现有 ROI 标定一致；重新标定时使用实时抓拍。</p>
+        </div>
+        <footer class="algorithm-dialog-foot">
+          <button type="button" class="btn btn-muted" :disabled="busy" @click="sourceDefaults">恢复本地视频</button>
+          <div class="algorithm-foot-right">
+            <span v-if="sourceError" class="algorithm-error" role="alert">{{ sourceError }}</span>
+            <button type="button" class="btn btn-muted" @click="emit('cancel')">取消</button>
+            <button type="submit" class="btn btn-primary" :disabled="!!sourceError || busy">保存视频源</button>
+          </div>
+        </footer>
+      </form>
+
+      <div v-else class="algorithm-form">
+        <div class="algorithm-scroll source-device-actions">
+          <p>导出或导入本机晶圆标定、参考帧和检测参数。视频源密码不会导出。</p>
+          <div class="source-device-buttons">
+            <button type="button" class="btn btn-muted" :disabled="busy" @click="emit('exportProfile')">导出设备配置 ZIP</button>
+            <button type="button" class="btn btn-muted" :disabled="busy" @click="emit('importProfile')">导入设备配置 ZIP</button>
+          </div>
+        </div>
+        <footer class="algorithm-dialog-foot">
+          <span></span>
+          <button type="button" class="btn btn-primary" @click="emit('cancel')">关闭</button>
+        </footer>
+      </div>
     </section>
   </div>
 </template>
