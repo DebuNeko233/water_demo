@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 from sample_backend.services.profile_archive import export_profile_archive, import_profile_archive
 from sample_backend.services.station_position import (
     StageCalibrationInput, StageReferenceInput, StageRemoveReferenceInput,
+    StageLiveReferenceInput,
 )
 from sample_backend.services.water_session import InvalidFrame, WaterDetectionSession
 from sample_backend.services.user_access import AccessDenied
@@ -44,6 +45,20 @@ def remove_reference(req: StageRemoveReferenceInput, request: Request) -> dict:
     try:
         request.app.state.user_access.require_admin(req.admin_token)
         return request.app.state.station_profile.remove_reference(req)
+    except AccessDenied as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+    except (InvalidFrame, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post('/reference/live')
+def capture_live_reference(req: StageLiveReferenceInput, request: Request) -> dict:
+    try:
+        request.app.state.user_access.require_admin(req.admin_token)
+        source = request.app.state.video_source.current()
+        frame = request.app.state.video_stream.snapshot_raw(source)
+        label = 'USB camera' if source.kind == 'usb' else 'RTSP camera'
+        return request.app.state.station_profile.capture_live(req, frame, label)
     except AccessDenied as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
     except (InvalidFrame, ValueError) as exc:
