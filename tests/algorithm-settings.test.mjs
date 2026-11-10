@@ -14,6 +14,14 @@ test('original algorithm defaults and every editable field remain aligned', () =
   assert.equal(validateAlgorithmSettings(copyAlgorithmSettings(DEFAULT_ALGORITHM_SETTINGS)), null)
 })
 
+test('water anomaly coefficient label changes without renaming the saved algorithm field', () => {
+  const entry = ALGORITHM_GROUPS.flatMap(group => group.fields)
+    .find(field => field.key === 's_water_threshold')
+  assert.ok(entry)
+  assert.equal(entry.label, '水流异常系数阈值')
+  assert.equal(DEFAULT_ALGORITHM_SETTINGS.s_water_threshold, 0.025)
+})
+
 test('invalid crossed ROI ratios, blur kernels and excessive history are rejected', () => {
   const base = copyAlgorithmSettings(DEFAULT_ALGORITHM_SETTINGS)
   for (const [key, value] of [
