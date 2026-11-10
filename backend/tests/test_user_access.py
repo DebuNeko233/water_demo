@@ -180,3 +180,81 @@ def test_operator_video_uses_backend_approved_config(client, tmp_path):
     })
     assert blocked.status_code == 403
     assert client.get('/api/users/status').json()['settings']['sector_count'] == 16
+
+
+def test_only_admin_may_change_station_roi_or_reference_frames(client, tmp_path):
+    """Station writes must be protected by Python, not just hidden in Vue."""
+    cal = calibration()
+    endpoints = [
+        ('/api/stations/calibration', {
+            'stage': 'P1', 'calibration': cal,
+        }),
+        ('/api/stations/reference', {
+            'stage': 'P1', 'file_path': str(tmp_path / 'source.avi'), 'time_s': 0,
+        }),
+        ('/api/stations/reference/remove', {
+            'stage': 'P1', 'reference_id': 'a' * 32,
+        }),
+    ]
+    before = client.get('/api/stations/profile').json()
+    for url, payload in endpoints:
+        for token_data in ({}, {'admin_token': 'invalid-token'}):
+            denied = client.post(url, json={**payload, **token_data})
+            assert denied.status_code == 403, (url, denied.text)
+            assert denied.json()['detail'] == 'ADMIN_REQUIRED'
+    assert client.get('/api/stations/profile').json() == before
+    assert list((tmp_path / 'stations').glob('*.png')) == []
+
+    token = client.post('/api/users/setup', json={
+        'password': 'StationAdmin#1937',
+    }).json()['admin_token']
+    saved = client.post('/api/stations/calibration', json={
+        'stage': 'P1', 'calibration': cal, 'admin_token': token,
+    })
+    assert saved.status_code == 200, saved.text
+    assert saved.json()['stages']['P1']['calibration'] == cal
+
+    source = tmp_path / 'source.avi'
+    writer = cv2.VideoWriter(str(source),
+                             cv2.VideoWriter_fourcc(*'MJPG'), 30, (96, 96))
+    assert writer.isOpened()
+    for t in range(20):
+        writer.write(np.full((96, 96, 3), 50 + t, dtype=np.uint8))
+    writer.release()
+    captured = client.post('/api/stations/reference', json={
+        'stage': 'P1', 'file_path': str(source),
+        'time_s': 0, 'admin_token': token,
+    })
+    assert captured.status_code == 200, captured.text
+    refs = captured.json()['stages']['P1']['references']
+    assert len(refs) == 1
+    ref_id = refs[0]['id']
+    assert (tmp_path / 'stations' / (ref_id + '.png')).is_file()
+
+    assert client.post('/api/users/logout', json={
+        'admin_token': token,
+    }).status_code == 200
+    denied = client.post('/api/stations/reference/remove', json={
+        'stage': 'P1', 'reference_id': ref_id,
+        'admin_token': token,
+    })
+    assert denied.status_code == 403
+    assert (tmp_path / 'stations' / (ref_id + '.png')).is_file()
+
+    # No valid token survives a backend restart.
+    with TestClient(create_app()) as restarted:
+        assert restarted.post('/api/stations/calibration', json={
+            'stage': 'P1', 'calibration': cal,
+            'admin_token': token,
+        }).status_code == 403
+        login = restarted.post('/api/users/login', json={
+            'password': 'StationAdmin#1937',
+        })
+        assert login.status_code == 200, login.text
+        new_token = login.json()['admin_token']
+        removed = restarted.post('/api/stations/reference/remove', json={
+            'stage': 'P1', 'reference_id': ref_id,
+            'admin_token': new_token,
+        })
+        assert removed.status_code == 200, removed.text
+        assert removed.json()['stages']['P1']['references'] == []
