@@ -73,6 +73,7 @@ const detectorError = detection.error
 const detectionRecords = detection.records
 const analysisFPS = detection.sourceFrameRate
 const calibrationStage = ref<HTMLElement | null>(null)
+const calibrationImage = ref<HTMLImageElement | null>(null)
 const calibrationSvg = ref<SVGSVGElement | null>(null)
 const coordinateCheckEnabled = ref(false)
 const clickMarkers = ref<ClickMarker[]>([])
@@ -522,7 +523,7 @@ function onCalibrationClick(event: MouseEvent): void {
     return
   }
   const point = mapped.point
-  const videoRect = calibrationVideo.value?.getBoundingClientRect()
+  const videoRect = calibrationImage.value?.getBoundingClientRect()
   const svgRect = svg?.getBoundingClientRect()
   const oldPoint = viewportToVideo(event.clientX, event.clientY, boxRect, draftWidth.value, draftHeight.value)
   const projected = svg ? svgSourceToClient(svg, point.x, point.y) : null
@@ -545,7 +546,7 @@ function onCalibrationClick(event: MouseEvent): void {
       resolution: `${draftWidth.value}×${draftHeight.value}`,
       devicePixelRatio: window.devicePixelRatio,
       method: mapped.method,
-      timestamp: calibrationVideo.value?.currentTime ?? 0,
+      timestamp: calibrationTime.value,
     }
     if (radius.value === null) {
       clickMarkers.value = [...clickMarkers.value,
@@ -942,7 +943,7 @@ onBeforeUnmount(() => {
             </div>
             <p v-if="stationError" class="station-error" role="alert">{{ stationError }}</p>
           </div>
-          <div ref="calibrationStage" class="calibration-stage" :class="{ 'stage-ready': !!draftWidth }"><div class="video-fit calibration-fit" :style="calibrationViewportStyle" @click="onCalibrationClick"><img v-if="liveSnapshotUrl" class="live-calibration-image" :src="liveSnapshotUrl" alt="标定视频画面"/><svg ref="calibrationSvg" class="roi-overlay" :viewBox="draftOverlaySize" preserveAspectRatio="none" aria-hidden="true"><template v-if="center"><path :d="`M ${center.x-13} ${center.y} h26 M ${center.x} ${center.y-13} v26`" class="calib-cross"/><circle :cx="center.x" :cy="center.y" r="4" fill="#59d7ff"/></template><template v-if="draftCalibration"><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius" class="calib-wafer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * outerRadiusRatio" class="ring-outer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * innerRadiusRatio" class="ring-inner"/></template></svg></div></div>
+          <div ref="calibrationStage" class="calibration-stage" :class="{ 'stage-ready': !!draftWidth }"><div class="video-fit calibration-fit" :style="calibrationViewportStyle" @click="onCalibrationClick"><img v-if="liveSnapshotUrl" ref="calibrationImage" class="live-calibration-image" :src="liveSnapshotUrl" alt="标定视频画面"/><svg ref="calibrationSvg" class="roi-overlay" :viewBox="draftOverlaySize" preserveAspectRatio="none" aria-hidden="true"><template v-if="center"><path :d="`M ${center.x-13} ${center.y} h26 M ${center.x} ${center.y-13} v26`" class="calib-cross"/><circle :cx="center.x" :cy="center.y" r="4" fill="#59d7ff"/></template><template v-if="draftCalibration"><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius" class="calib-wafer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * outerRadiusRatio" class="ring-outer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * innerRadiusRatio" class="ring-inner"/></template></svg></div></div>
           <div v-if="isLiveVideo" class="live-calibration-controls"><button type="button" class="btn btn-muted" :disabled="liveSnapshotBusy" @click="refreshCalibrationSnapshot()">{{ liveSnapshotBusy ? '抓拍中…' : '刷新画面' }}</button></div>
           <div v-else class="calib-timeline"><span>定位画面</span><input type="range" aria-label="标注画面位置" min="0" :max="calibrationDuration || 1" step="0.01" :value="calibrationTime" :style="{ '--progress': calibrationProgress + '%' }" :disabled="!calibrationDuration" @input="onCalibrationSeek" @change="onCalibrationSeekEnd"/><span>{{ formatTime(calibrationTime) }} / {{ formatTime(calibrationDuration) }}</span></div>
           <div class="calibration-status"><strong>{{ calibrationPhase }}</strong><span>{{ calibrationMeasure }}</span></div>
