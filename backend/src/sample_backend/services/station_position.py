@@ -32,6 +32,11 @@ class StageCalibrationInput(BaseModel):
     admin_token: str | None = Field(default=None, max_length=128)
 
 
+class SingleCalibrationInput(BaseModel):
+    calibration: CalibrationInput
+    admin_token: str = Field(min_length=1, max_length=128)
+
+
 class StageReferenceInput(BaseModel):
     stage: str
     file_path: str = Field(min_length=1, max_length=4096)
@@ -147,6 +152,9 @@ class StageProfileStore:
             return {'version': 1, 'stages': {
                 s: {'calibration': None, 'references': []} for s in STAGES}}
         obj = json.loads(self.path.read_text(encoding='utf-8'))
+        if obj.get('single_calibration'):
+            obj['single_calibration'] = CalibrationInput.model_validate(
+                obj['single_calibration']).model_dump()
         for s in STAGES:
             obj['stages'][s]['calibration'] = (
                 CalibrationInput.model_validate(obj['stages'][s]['calibration']).model_dump()
@@ -191,6 +199,21 @@ class StageProfileStore:
             snapshot['ready'] = all(stage_ready)
             snapshot['minimum_references'] = MIN_REFS
             return snapshot
+
+    def save_single(self, calibration: CalibrationInput) -> dict:
+        """Persist the operator's approved single-station ROI across restarts."""
+        with self._lock:
+            old = self._profile.get('single_calibration')
+            self._profile['single_calibration'] = calibration.model_dump()
+            try:
+                self._save()
+            except Exception:
+                if old is None:
+                    self._profile.pop('single_calibration', None)
+                else:
+                    self._profile['single_calibration'] = old
+                raise
+            return self.snapshot()
 
     @staticmethod
     def _stage(stage: str) -> str:
