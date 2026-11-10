@@ -114,7 +114,7 @@ function saveSource(): void {
             <label for="source-file-path">视频路径</label>
             <div class="source-path-row">
               <input id="source-file-path" :value="sourceDraft.file_path" type="text"
-                readonly placeholder="未选择视频" title="已选择的视频路径" />
+                readonly placeholder="未选择视频" :title="sourceDraft.file_path" />
               <button type="button" class="btn btn-muted" :disabled="busy" @click="browseVideo">浏览…</button>
             </div>
           </div>
