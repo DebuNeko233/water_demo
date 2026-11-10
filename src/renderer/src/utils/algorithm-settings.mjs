@@ -35,7 +35,7 @@ export const ALGORITHM_GROUPS = [
     ] },
   { title: 'OK / NG 判定', hint: '连续异常与恢复使用不同时间门槛',
     fields: [
-      { key: 's_water_threshold', label: 'S_water 异常阈值', unit: '', min: 0, max: 1, step: 0.005 },
+      { key: 's_water_threshold', label: '水流异常系数阈值', unit: '', min: 0, max: 1, step: 0.005 },
       { key: 'ng_hold_seconds', label: '进入 NG 持续时间', unit: 's', min: 0, max: 30, step: 0.1 },
       { key: 'recover_hold_seconds', label: '恢复 OK 持续时间', unit: 's', min: 0, max: 30, step: 0.1 },
     ] },
