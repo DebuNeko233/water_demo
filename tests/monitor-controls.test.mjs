@@ -37,21 +37,37 @@ test('four metric panel has no duplicated S_water threshold or detection region'
   assert.ok(!app.includes('S_water 历史曲线'))
 })
 
-test('start and stop detection replace replay and screen-only pause', () => {
+test('video playback buttons remain under the image and are independent of inference', () => {
+  const imageControls = app.match(/<div class="video-footer"[\s\S]*?<\/section>/)?.[0]
+  assert.ok(imageControls)
+  assert.match(imageControls, /@click="togglePlay"/)
+  assert.match(imageControls, /暂停播放/)
+  assert.match(imageControls, /播放视频/)
+  assert.match(imageControls, /暂停画面/)
+  assert.match(imageControls, /继续画面/)
+  assert.match(app, /if \(isPlaying\.value\) detection\.pause\(\)/)
+  assert.match(app, /else detection\.play\(\)/)
+  assert.doesNotMatch(imageControls, /@click="stopDetection"/)
+})
+
+test('start and stop buttons only control algorithm; video capture stays open', () => {
   const footer = app.match(/<footer class="bottom-bar">[\s\S]*?<\/footer>/)?.[0]
   assert.ok(footer)
   assert.match(footer, /@click="startDetection">▶ 开始检测/)
   assert.match(footer, /@click="stopDetection">■ 停止检测/)
   assert.match(footer, /导出检测结果/)
-  for (const former of ['从头播放', '暂停显示', '暂停播放', 'restart']) {
-    assert.ok(!footer.includes(former))
-  }
-  assert.match(app, /await detection\.stop\(\)/)
-  assert.match(playback, /async function stop\(\)/)
-  assert.match(playback, /await stopPythonVideo\(sid\)/)
-  assert.match(playback, /hasSession\.value = false/)
-  assert.match(playback, /records\.value = \[\]/) // Only full invalidation clears CSV.
-  assert.match(client, /'POST', '\/api\/video\/stop'/)
-  assert.match(api, /@router\.post\('\/stop'\)/)
-  assert.match(stream, /def stop\(self, session_id: str\)/)
+  assert.match(app, /await detection\.startDetection\(\)/)
+  assert.match(app, /await detection\.stopDetection\(\)/)
+  assert.match(app, /isDetecting\.value/)
+  assert.match(playback, /async function startDetection\(\)/)
+  assert.match(playback, /async function stopDetection\(\)/)
+  assert.match(playback, /setPythonDetection\(sid, true\)/)
+  assert.match(playback, /setPythonDetection\(sid, false\)/)
+  assert.match(playback, /isDetecting\.value = state\.detecting/)
+  assert.match(client, /'\/api\/video\/detection\/start'/)
+  assert.match(client, /'\/api\/video\/detection\/stop'/)
+  assert.match(api, /@router\.post\('\/detection\/start'\)/)
+  assert.match(api, /@router\.post\('\/detection\/stop'\)/)
+  assert.match(stream, /def set_detection\(self, session_id: str, enabled: bool\)/)
+  assert.match(stream, /if not self\._detecting:/)
 })
