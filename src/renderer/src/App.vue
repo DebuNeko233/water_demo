@@ -73,6 +73,7 @@ const detectorError = detection.error
 const detectionRecords = detection.records
 const analysisFPS = detection.sourceFrameRate
 const hasDetectionSession = detection.hasSession
+const isDetecting = detection.isDetecting
 const startingDetection = ref(false)
 const stoppingDetection = ref(false)
 const calibrationStage = ref<HTMLElement | null>(null)
@@ -113,6 +114,7 @@ const videoError = detection.error
 const videoOpenIssue = detection.openIssue
 const message = ref('')
 let previouslyPlaying = false
+let calibrationWasDetecting = false
 let resumeAt = 0
 let seekWasPlaying = false
 let calibrationSnapshotVersion = 0
@@ -282,7 +284,7 @@ async function refreshAdminVideoSource(): Promise<void> {
   }
 }
 
-async function startConfiguredSource(): Promise<void> {
+async function startConfiguredSource(detectOnOpen = false): Promise<void> {
   if (!stationProfile.value) await refreshStationProfile()
   const auto = stationProfile.value?.ready
     ? stationProfile.value.stages.P1.calibration : null
@@ -305,7 +307,7 @@ async function startConfiguredSource(): Promise<void> {
   videoHeight.value = chosen.height
   screen.value = 'monitor'
   seekDraft.value = null
-  await detection.open('', chosen, 0, true, mode)
+  await detection.open('', chosen, 0, true, mode, detectOnOpen)
   if (videoOpenIssue.value === 'mismatch' && currentRole.value === 'admin' &&
       adminToken.value && !modalOpen.value) {
     openCalibration(false)
@@ -482,6 +484,7 @@ async function deleteCurrentReference(id: string): Promise<void> {
 function openCalibration(existing: boolean): void {
   if (currentRole.value !== 'admin' || !adminToken.value || modalOpen.value) return
   previouslyPlaying = isPlaying.value
+  calibrationWasDetecting = isDetecting.value
   resumeAt = currentTime.value
   detection.pause()
   resetDraft()
@@ -638,7 +641,9 @@ async function confirmCalibration(): Promise<void> {
   // Both file and live frames enter the same unchanged Python WaterDetector.
   await nextTick()
   await detection.open('', nextCalibration,
-    isLiveVideo.value ? 0 : calibrationFrameTime.value, isLiveVideo.value, stationMode.value)
+    isLiveVideo.value ? 0 : calibrationFrameTime.value,
+    previouslyPlaying || !hasDetectionSession.value, stationMode.value,
+    calibrationWasDetecting)
 }
 function onMainSeek(event: Event): void {
   if (seekDraft.value === null) {
@@ -653,26 +658,34 @@ function onMainSeekEnd(event: Event): void {
   seekDraft.value = null
   void detection.seek(seconds, resume)
 }
+function togglePlay(): void {
+  if (!hasDetectionSession.value) return
+  if (isPlaying.value) detection.pause()
+  else detection.play()
+}
 async function startDetection(): Promise<void> {
-  if (startingDetection.value || stoppingDetection.value || isPlaying.value ||
+  if (startingDetection.value || stoppingDetection.value || isDetecting.value ||
       detectorStatus.value === 'connecting') return
   startingDetection.value = true
   try {
     if (hasDetectionSession.value) {
-      detection.play()
+      await detection.startDetection()
     } else {
-      await startConfiguredSource()
-      // This starts a new session only after a saved ROI has been found.
+      await startConfiguredSource(true)
     }
+  } catch {
+    notify('启动检测失败，请检查视频连接')
   } finally {
     startingDetection.value = false
   }
 }
 async function stopDetection(): Promise<void> {
-  if (stoppingDetection.value || !hasDetectionSession.value) return
+  if (stoppingDetection.value || !isDetecting.value) return
   stoppingDetection.value = true
   try {
-    await detection.stop()
+    await detection.stopDetection()
+  } catch {
+    notify('停止检测失败，请重试')
   } finally {
     stoppingDetection.value = false
   }
@@ -686,7 +699,8 @@ async function retryPythonVideo(): Promise<void> {
     await window.desktop.backend.retry()
     if (calibration.value) {
       await detection.open('', calibration.value,
-        isLiveVideo.value ? 0 : currentTime.value, isLiveVideo.value, stationMode.value)
+        isLiveVideo.value ? 0 : currentTime.value,
+        isPlaying.value, stationMode.value, isDetecting.value)
     }
   } catch (reason) {
     notify('Python 重连失败，请查看启动日志')
@@ -828,7 +842,8 @@ async function applyAlgorithmSettings(next: AlgorithmSettings): Promise<void> {
     notify('算法参数已应用')
     if (calibration.value) {
       await detection.open('', calibration.value,
-        isLiveVideo.value ? 0 : currentTime.value, resume, stationMode.value)
+        isLiveVideo.value ? 0 : currentTime.value,
+        resume, stationMode.value, isDetecting.value)
     }
   } catch (reason) {
     notify(userErrorText(reason))
@@ -938,9 +953,9 @@ onBeforeUnmount(() => {
           <div class="video-footer" :class="{ 'video-footer-live': isLiveVideo }">
             <template v-if="!isLiveVideo">
               <input class="progress-range" type="range" aria-label="视频播放进度" min="0" :max="duration || 1" step="0.01" :value="shownTime" :style="{ '--progress': progress + '%' }" :disabled="!duration || !hasDetectionSession" @input="onMainSeek" @change="onMainSeekEnd"/>
-              <div class="playback"><div class="playback-left"><button title="后退 5 秒" aria-label="后退 5 秒" :disabled="!hasDetectionSession" @click="jump(-5)">↶</button><button title="前进 5 秒" aria-label="前进 5 秒" :disabled="!hasDetectionSession" @click="jump(5)">↷</button><span>{{ formatTime(shownTime) }} / {{ formatTime(duration) }}</span></div></div>
+              <div class="playback"><div class="playback-left"><button title="后退 5 秒" aria-label="后退 5 秒" :disabled="!hasDetectionSession" @click="jump(-5)">↶</button><button :title="isPlaying ? '暂停播放' : '播放视频'" :aria-label="isPlaying ? '暂停播放' : '播放视频'" :disabled="!hasDetectionSession" @click="togglePlay">{{ isPlaying ? 'Ⅱ' : '▶' }}</button><button title="前进 5 秒" aria-label="前进 5 秒" :disabled="!hasDetectionSession" @click="jump(5)">↷</button><span>{{ formatTime(shownTime) }} / {{ formatTime(duration) }}</span></div></div>
             </template>
-            <div v-else class="playback live-playback"><div class="playback-left"><span class="live-label">● 实时画面</span><span>{{ formatTime(currentTime) }}</span></div></div>
+            <div v-else class="playback live-playback"><div class="playback-left"><span class="live-label">● 实时画面</span><button :title="isPlaying ? '暂停画面' : '继续画面'" :aria-label="isPlaying ? '暂停画面' : '继续画面'" :disabled="!hasDetectionSession" @click="togglePlay">{{ isPlaying ? 'Ⅱ' : '▶' }}</button><span>{{ formatTime(currentTime) }}</span></div></div>
           </div>
         </section>
 
@@ -950,7 +965,7 @@ onBeforeUnmount(() => {
           <section class="panel chart-panel"><div class="panel-heading"><span class="panel-title">异常谱线</span><span class="chart-legend"><i/> S_water　 <b>┄</b> NG 阈值</span></div><div class="chart-body"><svg viewBox="0 0 520 140" preserveAspectRatio="none" role="img" aria-label="实时水流异常检测历史曲线"><path d="M50 18H510 M50 66H510 M50 115H510" class="chart-grid"/><path :d="`M50 ${chartThresholdY}H510`" class="chart-threshold"/><polyline v-if="chartPoints" :points="chartPoints" class="chart-series"/><text x="5" y="20">{{ chartMaximum.toFixed(3) }}</text><text x="5" :y="chartThresholdY + 2">{{ detectionThreshold.toFixed(3) }}</text><text x="5" y="118">0.000</text><text x="50" y="133">-5s</text><text x="480" y="133">当前</text><text v-if="!chartPoints" x="285" y="99" class="chart-empty">等待检测数据</text></svg></div></section>
         </div>
       </main>
-      <footer class="bottom-bar"><div class="file-info"><span>视频参数</span><strong :title="sourceLabel">{{ sourceLabel }}</strong><i v-if="videoWidth && videoHeight"/><span v-if="videoWidth && videoHeight">{{ videoWidth }} × {{ videoHeight }}</span><span v-if="analysisFPS > 0">· {{ analysisFPS.toFixed(2) }} FPS</span></div><div class="footer-actions"><button class="btn btn-primary" :disabled="isPlaying || startingDetection || stoppingDetection || detectorStatus === 'connecting'" @click="startDetection">▶ 开始检测</button><button class="btn btn-danger" :disabled="!hasDetectionSession || stoppingDetection" @click="stopDetection">■ 停止检测</button><button class="btn btn-muted" :disabled="!detectionRecords.length" title="导出当前检测时段的逐帧采样数据" @click="detection.exportCSV">⇩ 导出检测结果</button></div></footer>
+      <footer class="bottom-bar"><div class="file-info"><span>视频参数</span><strong :title="sourceLabel">{{ sourceLabel }}</strong><i v-if="videoWidth && videoHeight"/><span v-if="videoWidth && videoHeight">{{ videoWidth }} × {{ videoHeight }}</span><span v-if="analysisFPS > 0">· {{ analysisFPS.toFixed(2) }} FPS</span></div><div class="footer-actions"><button class="btn btn-primary" :disabled="isDetecting || startingDetection || stoppingDetection || detectorStatus === 'connecting'" @click="startDetection">▶ 开始检测</button><button class="btn btn-danger" :disabled="!isDetecting || stoppingDetection" @click="stopDetection">■ 停止检测</button><button class="btn btn-muted" :disabled="!detectionRecords.length" title="导出当前检测时段的逐帧采样数据" @click="detection.exportCSV">⇩ 导出检测结果</button></div></footer>
     </template>
 
     <AlgorithmSettingsModal v-if="algorithmSettingsOpen && currentRole === 'admin'" :settings="algorithmSettings" :source="videoSourceSettings" :busy="settingsBusy || archiveBusy" @cancel="cancelAlgorithmSettings" @save="applyAlgorithmSettings" @save-source="applyVideoSourceSettings" @import-profile="importDeviceProfile" @export-profile="exportDeviceProfile"/>
