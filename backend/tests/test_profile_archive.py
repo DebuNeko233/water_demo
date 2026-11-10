@@ -58,6 +58,10 @@ def test_backup_contains_roi_png_nozzle_groups_and_approved_settings(monkeypatch
     with TestClient(create_app()) as client:
         profile = configured_client(client, tmp_path)
         token = admin_token(client)
+        single = {'cx': 48, 'cy': 47, 'radius': 28, 'width': 96, 'height': 96}
+        assert client.post('/api/stations/calibration/single', json={
+            'admin_token': token, 'calibration': single,
+        }).status_code == 200
         changed = DetectorSettings(s_water_threshold=0.23, sector_count=18,
                                    station_match_threshold=0.67)
         assert client.post("/api/users/settings", json={
@@ -82,6 +86,7 @@ def test_backup_contains_roi_png_nozzle_groups_and_approved_settings(monkeypatch
             assert len([x for x in names if x.endswith(".png")]) == 9
             exported = json.loads(bundle.read("stations/profile.json"))
             assert exported["stages"]["P3"]["references"][0]["group"] == "nozzle_a"
+            assert exported["single_calibration"] == single
             assert json.loads(bundle.read("detector/settings.json"))["sector_count"] == 18
             assert json.loads(bundle.read("detector/settings.json"))["station_match_threshold"] == 0.67
 
@@ -104,6 +109,7 @@ def test_backup_contains_roi_png_nozzle_groups_and_approved_settings(monkeypatch
         })
         assert restored.status_code == 200, restored.text
         assert restored.json()["profile"]["ready"] is True
+        assert restored.json()["profile"]["single_calibration"] == single
         assert restored.json()["reference_count"] == 9
         assert restored.json()["settings"]["sector_count"] == 18
         assert restored.json()["settings"]["station_match_threshold"] == 0.67
