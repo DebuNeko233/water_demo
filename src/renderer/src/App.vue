@@ -255,7 +255,7 @@ function chooseVideo(): void {
   fileInput.value.value = ''
   fileInput.value.click()
 }
-function onFileChange(event: Event): void {
+async function onFileChange(event: Event): Promise<void> {
   const file = (event.target as HTMLInputElement).files?.[0]
   if (!file) return
   if (!file.type.startsWith('video/') && !/\.(mp4|mov|avi|mkv|webm|m4v)$/i.test(file.name)) {
@@ -269,6 +269,41 @@ function onFileChange(event: Event): void {
   }
   if (!filePath) {
     notify('请选择磁盘上的视频文件')
+    return
+  }
+  if (currentRole.value !== 'admin' || !adminToken.value) {
+    // Operators may switch videos, but must reuse an administrator-created
+    // calibration. Never open the annotation editor as an operator.
+    if (!stationProfile.value) await refreshStationProfile()
+    const readyAutoCalibration = stationProfile.value?.ready
+      ? stationProfile.value.stages.P1.calibration : null
+    let reused = stationMode.value === 'auto'
+      ? readyAutoCalibration : calibration.value
+    let mode: StageMode = stationMode.value
+    if (!reused && readyAutoCalibration) {
+      reused = readyAutoCalibration
+      mode = 'auto'
+    }
+    if (!reused) {
+      if (pendingUrl.value) URL.revokeObjectURL(pendingUrl.value)
+      pendingVideoPath.value = filePath
+      pendingFile.value = file
+      pendingUrl.value = URL.createObjectURL(file)
+      notify('请切换管理员完成晶圆标注')
+      return
+    }
+    detection.pause()
+    if (activeUrl.value) URL.revokeObjectURL(activeUrl.value)
+    activeUrl.value = URL.createObjectURL(file)
+    activeVideoPath.value = filePath
+    activeName.value = file.name
+    calibration.value = reused
+    stationMode.value = mode
+    videoWidth.value = reused.width
+    videoHeight.value = reused.height
+    screen.value = 'monitor'
+    seekDraft.value = null
+    await detection.open(filePath, reused, 0, false, mode)
     return
   }
   if (pendingUrl.value) URL.revokeObjectURL(pendingUrl.value)
@@ -312,6 +347,7 @@ async function refreshStationProfile(): Promise<void> {
   }
 }
 function chooseStationMode(mode: StageMode): void {
+  if (currentRole.value !== 'admin' || !adminToken.value) return
   stationMode.value = mode
   if (mode === 'auto') {
     selectStation(selectedStation.value)
@@ -366,7 +402,8 @@ async function importDeviceProfile(): Promise<void> {
 }
 
 async function captureCurrentReference(): Promise<void> {
-  if (stationBusy.value || !draftCalibration.value) return
+  if (currentRole.value !== 'admin' || !adminToken.value ||
+      stationBusy.value || !draftCalibration.value) return
   const file = pendingVideoPath.value || activeVideoPath.value
   if (!file) { stationError.value = '请先选择视频'; return }
   if (calibrationVideo.value?.seeking) {
@@ -379,10 +416,10 @@ async function captureCurrentReference(): Promise<void> {
     // Save this position's ROI then capture a *lossless OpenCV frame* on
     // Python side; browser preview images are never used for matching.
     stationProfile.value = await saveStationCalibration(
-      selectedStation.value, draftCalibration.value)
+      selectedStation.value, draftCalibration.value, adminToken.value)
     const time = calibrationVideo.value?.currentTime ?? calibrationTime.value
     const group: ReferenceGroup = selectedStation.value === 'P3' ? selectedP3Nozzle.value : 'default'
-    stationProfile.value = await captureStationReference(selectedStation.value, file, time, group)
+    stationProfile.value = await captureStationReference(selectedStation.value, file, time, group, adminToken.value)
     notify(selectedStation.value + ' 参考帧已采集')
   } catch (error) {
     stationError.value = String(error)
@@ -391,11 +428,11 @@ async function captureCurrentReference(): Promise<void> {
   }
 }
 async function deleteCurrentReference(id: string): Promise<void> {
-  if (stationBusy.value) return
+  if (currentRole.value !== 'admin' || !adminToken.value || stationBusy.value) return
   stationBusy.value = true
   stationError.value = ''
   try {
-    stationProfile.value = await removeStationReference(selectedStation.value, id)
+    stationProfile.value = await removeStationReference(selectedStation.value, id, adminToken.value)
   } catch (error) {
     stationError.value = String(error)
   } finally {
@@ -403,7 +440,7 @@ async function deleteCurrentReference(id: string): Promise<void> {
   }
 }
 function openCalibration(existing: boolean): void {
-  if (modalOpen.value) return
+  if (currentRole.value !== 'admin' || !adminToken.value || modalOpen.value) return
   previouslyPlaying = isPlaying.value
   resumeAt = currentTime.value
   detection.pause()
@@ -428,6 +465,7 @@ function openCalibration(existing: boolean): void {
   })
 }
 function editCalibration(): void {
+  if (currentRole.value !== 'admin' || !adminToken.value) return
   if (calibration.value && activeUrl.value) openCalibration(true)
 }
 function onCalibrationMetadata(): void {
@@ -469,7 +507,7 @@ function formatRect(rect: DOMRect | undefined): string {
     : 'N/A'
 }
 function onCalibrationClick(event: MouseEvent): void {
-  if (!modalOpen.value) return
+  if (!modalOpen.value || currentRole.value !== 'admin' || !adminToken.value) return
   // Metadata is sufficient for coordinate entry. Requiring loadeddata or
   // HAVE_CURRENT_DATA here could silently disable all clicks for files whose
   // browser preload stops after metadata.
@@ -565,7 +603,7 @@ function closeCalibration(): void {
   if (screen.value === 'monitor' && previouslyPlaying) detection.play()
 }
 async function confirmCalibration(): Promise<void> {
-  if (!readyToConfirm.value) return
+  if (currentRole.value !== 'admin' || !adminToken.value || !readyToConfirm.value) return
   const nextCalibration = stationMode.value === 'auto'
     ? stationProfile.value?.stages.P1.calibration
     : draftCalibration.value
@@ -653,6 +691,7 @@ function userErrorText(reason: unknown): string {
   return '操作失败，请检查密码或后端连接'
 }
 function resetToOperator(): void {
+  if (modalOpen.value) closeCalibration()
   currentRole.value = 'operator'
   adminToken.value = ''
   adminDialogOpen.value = false
@@ -684,6 +723,7 @@ async function authorizeAdministrator(password: string): Promise<void> {
     currentRole.value = 'admin'
     adminDialogOpen.value = false
     notify('已切换到管理员')
+    if (pendingFile.value && !modalOpen.value) openCalibration(false)
   } catch (reason) {
     adminError.value = userErrorText(reason)
     if (String(reason).includes('ADMIN_ALREADY_CONFIGURED')) {
@@ -810,7 +850,7 @@ onBeforeUnmount(() => {
     <template v-else>
       <main class="workspace">
         <section class="panel video-panel">
-          <div class="panel-heading"><span class="panel-title">检测画面</span><span v-if="stationMode === 'auto' && detectorResult" class="monitor-station-indicator">{{ detectorResult.stage === 'UNKNOWN' ? '工位未确认' : '工位 ' + (detectorResult.stage ?? '--') }}</span><div class="heading-actions"><button class="btn btn-muted" @click="editCalibration">重新标注</button><button class="btn btn-muted" @click="chooseVideo">更换视频</button></div></div>
+          <div class="panel-heading"><span class="panel-title">检测画面</span><span v-if="stationMode === 'auto' && detectorResult" class="monitor-station-indicator">{{ detectorResult.stage === 'UNKNOWN' ? '工位未确认' : '工位 ' + (detectorResult.stage ?? '--') }}</span><div class="heading-actions"><button v-if="currentRole === 'admin'" class="btn btn-muted" @click="editCalibration">重新标注</button><button class="btn btn-muted" @click="chooseVideo">更换视频</button></div></div>
           <div class="video-stage" ref="monitorStage">
             <div class="video-fit" :style="monitorViewportStyle">
               <img v-if="renderedFrame" class="video-element" :src="renderedFrame" alt="Python 逐帧推理后的检测画面"/>
@@ -841,7 +881,7 @@ onBeforeUnmount(() => {
     <input ref="fileInput" class="hidden-input" type="file" accept="video/*,.mp4,.mov,.avi,.mkv,.webm,.m4v" aria-label="选择视频文件" @change="onFileChange"/>
     <AlgorithmSettingsModal v-if="algorithmSettingsOpen && currentRole === 'admin'" :settings="algorithmSettings" @cancel="cancelAlgorithmSettings" @save="applyAlgorithmSettings"/>
     <AdminAccessDialog v-if="adminDialogOpen" :configured="adminConfigured" :busy="adminBusy" :error="adminError" @cancel="adminDialogOpen = false" @submit="authorizeAdministrator"/>
-    <div v-if="modalOpen" class="modal-mask" @click.self="closeCalibration">
+    <div v-if="modalOpen && currentRole === 'admin'" class="modal-mask" @click.self="closeCalibration">
       <section class="calibration-modal" role="dialog" aria-modal="true" aria-labelledby="calibration-title">
         <div class="modal-header"><div><h2 id="calibration-title">标注晶圆位置</h2></div><div class="modal-header-actions"><button v-if="false" type="button" class="coordinate-toggle" :aria-pressed="coordinateCheckEnabled" @click="coordinateCheckEnabled = !coordinateCheckEnabled">{{ coordinateCheckEnabled ? '坐标校验：开' : '坐标校验：关' }}</button><button type="button" class="modal-close" title="取消标注" aria-label="取消标注" @click="closeCalibration">×</button></div></div>
         <div class="modal-body">
