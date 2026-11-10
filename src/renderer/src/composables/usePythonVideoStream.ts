@@ -61,6 +61,11 @@ export function usePythonVideoStream() {
     records.value = []
     isLive.value = false
     sourceKind.value = 'file'
+    sourceFrameRate.value = 0
+    currentTime.value = 0
+    duration.value = 0
+    videoWidth.value = 0
+    videoHeight.value = 0
     renderedFrame.value = ''
     actualFrameRate.value = 0
     measuredStart = 0
