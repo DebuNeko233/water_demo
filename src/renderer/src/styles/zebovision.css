@@ -98,3 +98,7 @@
 .live-playback .live-label{color:#56deb0;font-size:12px;font-weight:700}
 .live-calibration-image{position:absolute;inset:0;width:100%;height:100%;display:block;object-fit:contain;user-select:none;pointer-events:none}
 .live-calibration-controls{display:flex;align-items:center;gap:16px;padding:9px 4px;color:#9fbdd0;font-size:12px}
+
+/* A four-metric 2x2 grid fills the available panel without vacant rows. */
+.data-panel .data-grid{flex:1;grid-template-rows:repeat(2,minmax(0,1fr))}
+.data-panel .metric{display:flex;flex-direction:column;justify-content:center}
