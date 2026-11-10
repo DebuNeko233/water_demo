@@ -31,7 +31,7 @@ test('one configurable P1/P2/P3 interface with independent enable switches', () 
   assert.ok(!app.includes('saveSingleCalibration'))
   assert.match(service, /enabled_stages: StageKey\[\]/)
   assert.match(service, /'\/api\/stations\/enabled'/)
-  assert.match(backend, /active_stages/)
+  assert.match(backend, /enabled_stages/)
 })
 
 test('Python resolves the detected stage before canonical detector and exports reason', () => {
