@@ -284,8 +284,8 @@ async function refreshAdminVideoSource(): Promise<void> {
   if (!adminToken.value) return
   try {
     videoSourceSettings.value = await adminVideoSource(adminToken.value)
-  } catch (error) {
-    notify('视频源配置读取失败：' + String(error))
+  } catch {
+    notify('视频源配置读取失败，请检查后端连接')
   }
 }
 
@@ -804,6 +804,7 @@ function resetToOperator(): void {
   if (modalOpen.value) closeCalibration()
   currentRole.value = 'operator'
   adminToken.value = ''
+  videoSourceSettings.value = { ...DEFAULT_VIDEO_SOURCE }
   adminDialogOpen.value = false
   adminError.value = ''
   if (algorithmSettingsOpen.value) cancelAlgorithmSettings()
@@ -886,7 +887,9 @@ async function applyVideoSourceSettings(next: VideoSourceSettings): Promise<void
     seekDraft.value = null
     notify('视频源已保存，请连接' + (saved.source.kind === 'file' ? '本地视频' : '摄像头'))
   } catch (error) {
-    notify('视频源保存失败：' + String(error))
+    // Some validation errors may contain a submitted RTSP URL/password.
+    // Never show the raw API body in a user-visible toast.
+    notify('视频源保存失败，请检查 RTSP 地址、USB 编号或管理员登录状态')
     if (String(error).includes('ADMIN_REQUIRED')) resetToOperator()
   } finally {
     settingsBusy.value = false
