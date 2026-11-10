@@ -60,6 +60,7 @@ class VideoOpenInput(BaseModel):
     detector: DetectorSettings | None = None
     admin_token: str | None = Field(default=None, max_length=128)
     stage_mode: Literal['single', 'auto'] = 'single'
+    detecting: bool = True  # Existing direct API clients keep inference on.
 
 
 class VideoNextInput(BaseModel):
@@ -83,6 +84,8 @@ class PythonVideoStream:
         self._lock = threading.RLock()
         self._cap: cv2.VideoCapture | None = None
         self._detector: RoiWaterDetector | None = None
+        self._detecting = True
+        self._initial_calibration: Calibration | None = None
         self._id: str | None = None
         self._fps = 0.0
         self._frame_count = 0
@@ -122,6 +125,8 @@ class PythonVideoStream:
             self._cap.release()
         self._cap = None
         self._detector = None
+        self._initial_calibration = None
+        self._detecting = False
         self._id = None
         self._history.clear()
         self._recognizer = None
@@ -140,6 +145,28 @@ class PythonVideoStream:
             self._verify(session_id)
             self._close()
 
+
+    def set_detection(self, session_id: str, enabled: bool) -> dict:
+        """Toggle inference without seeking, pausing or closing the source."""
+        with self._live_cv:
+            self._verify(session_id)
+            if enabled and not self._detecting:
+                self._history.clear()
+                self._candidate_stage = None
+                self._candidate_count = 0
+                self._active_stage = None
+                if self._mode == 'auto':
+                    self._detector = None
+                else:
+                    assert self._initial_calibration is not None
+                    self._detector = RoiWaterDetector(
+                        (self._height, self._width), self._fps,
+                        self._initial_calibration, self._config)
+            self._detecting = enabled
+            if not enabled:
+                self._live_overlay_result = None
+                self._history.clear()
+            return {'detecting': self._detecting}
 
     def _verify(self, sid: str) -> None:
         if sid != self._id or self._cap is None:
@@ -189,6 +216,8 @@ class PythonVideoStream:
                 self._close()
                 self._cap = cap
                 self._detector = detector
+                self._initial_calibration = Calibration(cal.cx, cal.cy, cal.radius)
+                self._detecting = req.detecting
                 self._id = uuid4().hex
                 self._width, self._height = width, height
                 self._fps = fps
@@ -246,7 +275,8 @@ class PythonVideoStream:
                 'outer_radius_ratio': self._config.outer_radius_ratio,
                 'stage_mode': self._mode, 'source_kind': self._source_kind,
                 'is_live': self._source_kind != 'file',
-                'station_match_threshold': self._station_match_threshold}
+                'station_match_threshold': self._station_match_threshold,
+                'detecting': self._detecting}
 
     def _seek_capture(self, time_s: float) -> None:
         if self._source_kind != 'file':
@@ -464,7 +494,9 @@ class PythonVideoStream:
         # The recognizer never edits the frame. The canonical WaterDetector
         # still processes the original full-FPS decoded BGR image.
         stage, confidence, scores, reason = ('P1', 1.0, {}, '')
-        if self._mode == 'auto':
+        if not self._detecting:
+            reason = 'DETECTION_STOPPED'
+        elif self._mode == 'auto':
             stage, confidence, scores, reason = self._auto_select(frame)
         if reason:
             data = None
@@ -499,7 +531,7 @@ class PythonVideoStream:
             }
         analyzed_at = time.perf_counter()
         packet = {'ended': False, 'frame_index': index, 'time_s': t,
-                  'result': result,
+                  'result': result, 'detecting': self._detecting,
                   'performance': {
                       'frames': 1,
                       'decode_ms': round((decoded_at - started) * 1000, 2),
