@@ -194,3 +194,57 @@ def test_settings_save_failure_restores_original_calibration(monkeypatch, tmp_pa
         assert (root / "profile.json").read_bytes() == previous
         assert sorted(p.name for p in root.glob("*.png")) == images
         assert client.get("/api/stations/profile").json()["stages"]["P1"]["calibration"]["cy"] == 38
+
+
+
+def test_zip_preserves_enabled_station_subset_and_old_zip_defaults(monkeypatch, tmp_path):
+    monkeypatch.setenv('APP_DATA_DIR', str(tmp_path / 'data'))
+    with TestClient(create_app()) as client:
+        configured_client(client, tmp_path)
+        token = admin_token(client)
+        disabled = client.post('/api/stations/enabled', json={
+            'admin_token': token, 'stage': 'P2', 'enabled': False,
+        })
+        assert disabled.status_code == 200
+        assert disabled.json()['enabled_stages'] == ['P1', 'P3']
+        export = tmp_path / 'enabled.zip'
+        assert client.post('/api/stations/archive/export', json={
+            'admin_token': token, 'file_path': str(export),
+        }).status_code == 200
+        with zipfile.ZipFile(export) as archive:
+            profile = json.loads(archive.read('stations/profile.json'))
+            assert profile['stages']['P1']['enabled'] is True
+            assert profile['stages']['P2']['enabled'] is False
+            assert profile['stages']['P3']['enabled'] is True
+
+        assert client.post('/api/stations/enabled', json={
+            'admin_token': token, 'stage': 'P2', 'enabled': True,
+        }).status_code == 200
+        imported = client.post('/api/stations/archive/import', json={
+            'admin_token': token, 'file_path': str(export),
+        })
+        assert imported.status_code == 200, imported.text
+        assert imported.json()['profile']['enabled_stages'] == ['P1', 'P3']
+        snap, model = client.app.state.station_profile.build(96, 96)
+        assert model is not None and set(model.active_stages) == {'P1', 'P3'}
+
+        # Legacy ZIP files do not have the enable flags: all three stations
+        # remain enabled, preserving the original three-station behavior.
+        legacy = tmp_path / 'old.zip'
+        with zipfile.ZipFile(export) as source, zipfile.ZipFile(legacy, 'w') as output:
+            for name in source.namelist():
+                content = source.read(name)
+                if name == 'stations/profile.json':
+                    raw = json.loads(content)
+                    for stage in ('P1', 'P2', 'P3'):
+                        raw['stages'][stage].pop('enabled', None)
+                    content = json.dumps(raw).encode('utf-8')
+                output.writestr(name, content)
+        restored = client.post('/api/stations/archive/import', json={
+            'admin_token': token, 'file_path': str(legacy),
+        })
+        assert restored.status_code == 200, restored.text
+        assert restored.json()['profile']['enabled_stages'] == ['P1', 'P2', 'P3']
+
+    with TestClient(create_app()) as app:
+        assert app.get('/api/stations/profile').json()['enabled_stages'] == ['P1', 'P2', 'P3']
