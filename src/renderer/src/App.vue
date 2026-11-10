@@ -48,8 +48,6 @@ type ClickMarker = { x: number; y: number; kind: '中心' | '边缘' }
 
 type Screen = 'welcome' | 'monitor'
 const screen = ref<Screen>('monitor')
-const fileInput = ref<HTMLInputElement | null>(null)
-const calibrationVideo = ref<HTMLVideoElement | null>(null)
 // Administrator-approved settings are stored and enforced in Python, never
 // trusted from browser localStorage or a client-supplied configuration.
 const algorithmSettings = ref<AlgorithmSettings>(copyAlgorithmSettings(DEFAULT_ALGORITHM_SETTINGS))
@@ -83,11 +81,6 @@ const monitorStage = ref<HTMLElement | null>(null)
 const calibrationBox = ref({ width: 0, height: 0 })
 const monitorBox = ref({ width: 0, height: 0 })
 const modalOpen = ref(false)
-const pendingFile = ref<File | null>(null)
-const pendingVideoPath = ref('')
-const activeVideoPath = ref('')
-const pendingUrl = ref('')
-const activeUrl = ref('')
 const activeName = ref('')
 const calibration = ref<Calibration | null>(null)
 const stationMode = ref<StageMode>('single')
@@ -117,6 +110,7 @@ const message = ref('')
 let previouslyPlaying = false
 let resumeAt = 0
 let seekWasPlaying = false
+let calibrationSnapshotVersion = 0
 const seekDraft = ref<number | null>(null)
 let toastTimeout: ReturnType<typeof setTimeout> | undefined
 
@@ -161,7 +155,6 @@ const calibrationMeasure = computed(() => {
   const base = `中心 (${Math.round(center.value.x)}, ${Math.round(center.value.y)})`
   return radius.value === null ? `${base} · 半径 --` : `${base} · 半径 ${Math.round(radius.value)} px`
 })
-const previewUrl = computed(() => pendingUrl.value || activeUrl.value)
 const sourceLabel = computed(() => videoSource.value.kind === 'rtsp'
   ? 'RTSP 实时摄像头'
   : videoSource.value.kind === 'usb' ? 'USB 摄像头 #' + videoSource.value.usb_index : '本地视频')
@@ -264,19 +257,14 @@ function formatTime(value: number): string {
   return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
 }
 function chooseVideo(): void {
-  if (isLiveVideo.value) {
-    void startConfiguredSource()
-    return
-  }
-  if (!fileInput.value) return
-  fileInput.value.value = ''
-  fileInput.value.click()
+  void startConfiguredSource()
 }
+
 async function refreshVideoSource(): Promise<void> {
   try {
     videoSource.value = await publicVideoSource()
   } catch {
-    // Source service may still be initializing.
+    // The backend may still be starting.
   }
 }
 
@@ -285,118 +273,58 @@ async function refreshAdminVideoSource(): Promise<void> {
   try {
     videoSourceSettings.value = await adminVideoSource(adminToken.value)
   } catch {
-    notify('视频源配置读取失败，请检查后端连接')
+    notify('视频源配置读取失败')
   }
 }
 
 async function startConfiguredSource(): Promise<void> {
-  if (!isLiveVideo.value) return
   if (!stationProfile.value) await refreshStationProfile()
   const auto = stationProfile.value?.ready
     ? stationProfile.value.stages.P1.calibration : null
-  const preferred = stationMode.value === 'auto'
-    ? auto : (calibration.value ?? stationProfile.value?.single_calibration ?? null)
   const single = stationProfile.value?.single_calibration ?? null
+  const preferred = stationMode.value === 'auto' ? auto : (calibration.value ?? single)
   const chosen = preferred ?? auto ?? single
   if (!chosen) {
-    notify('请切换管理员完成当前摄像头的晶圆标注')
-    if (currentRole.value === 'admin' && adminToken.value) openCalibration(false)
+    if (currentRole.value === 'admin' && adminToken.value) {
+      openCalibration(false)
+    } else {
+      notify('请切换管理员完成晶圆标注')
+    }
     return
   }
   const mode: StageMode = preferred ? stationMode.value : (auto ? 'auto' : 'single')
   stationMode.value = mode
   calibration.value = chosen
   activeName.value = sourceLabel.value
-  activeVideoPath.value = ''
   videoWidth.value = chosen.width
   videoHeight.value = chosen.height
   screen.value = 'monitor'
-  await detection.open('', chosen, 0, true, mode)
+  seekDraft.value = null
+  await detection.open('', chosen, 0, isLiveVideo.value, mode)
 }
 
-async function refreshLiveSnapshot(): Promise<void> {
-  if (!isLiveVideo.value || !adminToken.value || liveSnapshotBusy.value) return
+async function refreshCalibrationSnapshot(timeS = calibrationTime.value): Promise<void> {
+  if (!adminToken.value || !modalOpen.value) return
+  const request = ++calibrationSnapshotVersion
   liveSnapshotBusy.value = true
   stationError.value = ''
   try {
-    const frame = await cameraSnapshot(adminToken.value)
-    if (!modalOpen.value) return
+    const frame = await cameraSnapshot(adminToken.value, isLiveVideo.value ? 0 : timeS)
+    if (!modalOpen.value || request !== calibrationSnapshotVersion) return
     liveSnapshotUrl.value = 'data:image/jpeg;base64,' + frame.jpeg_base64
     draftWidth.value = frame.width
     draftHeight.value = frame.height
+    calibrationDuration.value = frame.duration_s
+    calibrationTime.value = frame.time_s
     calibrationFrameReady.value = true
-    calibrationTime.value = 0
-    calibrationDuration.value = 0
     if (stationMode.value === 'auto') selectStation(selectedStation.value)
-  } catch (error) {
-    stationError.value = '无法抓取摄像头画面：' + String(error)
+  } catch {
+    if (request === calibrationSnapshotVersion) stationError.value = '视频画面读取失败'
   } finally {
-    liveSnapshotBusy.value = false
+    if (request === calibrationSnapshotVersion) liveSnapshotBusy.value = false
   }
 }
 
-async function onFileChange(event: Event): Promise<void> {
-  if (isLiveVideo.value) return
-  const file = (event.target as HTMLInputElement).files?.[0]
-  if (!file) return
-  if (!file.type.startsWith('video/') && !/\.(mp4|mov|avi|mkv|webm|m4v)$/i.test(file.name)) {
-    notify('请选择视频文件')
-    return
-  }
-  let filePath = ''
-  try { filePath = window.desktop.system.getPathForFile(file) } catch {
-    notify('无法获取本地视频路径，请从磁盘重新选择文件')
-    return
-  }
-  if (!filePath) {
-    notify('请选择磁盘上的视频文件')
-    return
-  }
-  if (currentRole.value !== 'admin' || !adminToken.value) {
-    // Operators may switch videos, but must reuse an administrator-created
-    // calibration. Never open the annotation editor as an operator.
-    if (!stationProfile.value) await refreshStationProfile()
-    const readyAutoCalibration = stationProfile.value?.ready
-      ? stationProfile.value.stages.P1.calibration : null
-    let reused = stationMode.value === 'auto'
-      ? readyAutoCalibration : (calibration.value ?? stationProfile.value?.single_calibration ?? null)
-    let mode: StageMode = stationMode.value
-    if (!reused && readyAutoCalibration) {
-      reused = readyAutoCalibration
-      mode = 'auto'
-    }
-    if (!reused && stationProfile.value?.single_calibration) {
-      reused = stationProfile.value.single_calibration
-      mode = 'single'
-    }
-    if (!reused) {
-      if (pendingUrl.value) URL.revokeObjectURL(pendingUrl.value)
-      pendingVideoPath.value = filePath
-      pendingFile.value = file
-      pendingUrl.value = URL.createObjectURL(file)
-      notify('请切换管理员完成晶圆标注')
-      return
-    }
-    detection.pause()
-    if (activeUrl.value) URL.revokeObjectURL(activeUrl.value)
-    activeUrl.value = URL.createObjectURL(file)
-    activeVideoPath.value = filePath
-    activeName.value = file.name
-    calibration.value = reused
-    stationMode.value = mode
-    videoWidth.value = reused.width
-    videoHeight.value = reused.height
-    screen.value = 'monitor'
-    seekDraft.value = null
-    await detection.open(filePath, reused, 0, false, mode)
-    return
-  }
-  if (pendingUrl.value) URL.revokeObjectURL(pendingUrl.value)
-  pendingVideoPath.value = filePath
-  pendingFile.value = file
-  pendingUrl.value = URL.createObjectURL(file)
-  openCalibration(false)
-}
 function resetDraft(): void {
   center.value = null
   radius.value = null
@@ -496,12 +424,9 @@ async function importDeviceProfile(): Promise<void> {
 async function captureCurrentReference(): Promise<void> {
   if (currentRole.value !== 'admin' || !adminToken.value ||
       stationBusy.value || !draftCalibration.value) return
-  const file = pendingVideoPath.value || activeVideoPath.value
-  if (!isLiveVideo.value && !file) { stationError.value = '请先选择视频'; return }
-  if (calibrationVideo.value?.seeking) {
-    stationError.value = '请等待画面跳转结束，再采集参考帧'
-    return
-  }
+  const file = videoSourceSettings.value.file_path
+  if (!isLiveVideo.value && !file) { stationError.value = '请先在设置中选择视频'; return }
+  if (!calibrationFrameReady.value) { stationError.value = '请等待画面加载'; return }
   stationBusy.value = true
   stationError.value = ''
   try {
@@ -512,10 +437,10 @@ async function captureCurrentReference(): Promise<void> {
     const group: ReferenceGroup = selectedStation.value === 'P3' ? selectedP3Nozzle.value : 'default'
     if (isLiveVideo.value) {
       stationProfile.value = await captureLiveStationReference(selectedStation.value, group, adminToken.value)
-      await refreshLiveSnapshot()
+      await refreshCalibrationSnapshot()
     } else {
-      const time = calibrationVideo.value?.currentTime ?? calibrationTime.value
-      stationProfile.value = await captureStationReference(selectedStation.value, file, time, group, adminToken.value)
+      stationProfile.value = await captureStationReference(
+        selectedStation.value, file, calibrationTime.value, group, adminToken.value)
     }
     notify(selectedStation.value + ' 参考帧已采集')
   } catch (error) {
@@ -555,51 +480,21 @@ function openCalibration(existing: boolean): void {
   stationError.value = ''
   void refreshStationProfile()
   if (stationMode.value === 'auto') selectStation(selectedStation.value)
-  nextTick(() => {
-    if (isLiveVideo.value) {
-      void refreshLiveSnapshot()
-    } else {
-      // Re-calibration of a local file uses the browser preview at its position.
-      calibrationVideo.value?.load()
-    }
-  })
+  void nextTick(() => refreshCalibrationSnapshot(
+    existing && !isLiveVideo.value ? resumeAt : 0,
+  ))
 }
 function editCalibration(): void {
   if (currentRole.value !== 'admin' || !adminToken.value) return
-  if (calibration.value && (activeUrl.value || isLiveVideo.value)) openCalibration(true)
-}
-function onCalibrationMetadata(): void {
-  const video = calibrationVideo.value
-  if (!video) return
-  calibrationFrameReady.value = false
-  draftWidth.value = video.videoWidth
-  draftHeight.value = video.videoHeight
-  calibrationDuration.value = Number.isFinite(video.duration) ? video.duration : 0
-  if (pendingFile.value) {
-    video.currentTime = 0
-  } else if (calibrationDuration.value > 0) {
-    video.currentTime = Math.min(resumeAt, calibrationDuration.value)
-  }
-  calibrationTime.value = video.currentTime
-  if (stationMode.value === 'auto') selectStation(selectedStation.value)
-}
-function onCalibrationTime(): void {
-  calibrationTime.value = calibrationVideo.value?.currentTime || 0
-}
-function onCalibrationFrameReady(): void {
-  const video = calibrationVideo.value
-  calibrationFrameReady.value = !!video &&
-    video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && !video.seeking
+  if (calibration.value) openCalibration(true)
 }
 function onCalibrationSeek(event: Event): void {
-  const v = calibrationVideo.value
-  if (!v || !calibrationDuration.value) return
+  calibrationTime.value = Number((event.target as HTMLInputElement).value)
   calibrationFrameReady.value = false
-  v.currentTime = Number((event.target as HTMLInputElement).value)
-  calibrationTime.value = v.currentTime
-  // One ROI is reused while collecting multiple reference frames at
-  // different timestamps. Scrubbing must not erase its calibration.
   if (stationMode.value === 'single') resetDraft()
+}
+function onCalibrationSeekEnd(): void {
+  void refreshCalibrationSnapshot(calibrationTime.value)
 }
 function formatRect(rect: DOMRect | undefined): string {
   return rect
@@ -694,12 +589,7 @@ async function copyCoordinateCheck(): Promise<void> {
 }
 function closeCalibration(): void {
   modalOpen.value = false
-  if (pendingUrl.value) {
-    URL.revokeObjectURL(pendingUrl.value)
-    pendingUrl.value = ''
-    pendingVideoPath.value = ''
-    pendingFile.value = null
-  }
+  calibrationSnapshotVersion++
   liveSnapshotUrl.value = ''
   if (screen.value === 'monitor' && previouslyPlaying) detection.play()
 }
@@ -709,7 +599,7 @@ async function confirmCalibration(): Promise<void> {
     ? stationProfile.value?.stages.P1.calibration
     : draftCalibration.value
   if (!nextCalibration) return
-  const selectedTime = calibrationVideo.value?.currentTime ?? calibrationTime.value
+  const selectedTime = calibrationTime.value
   calibrationFrameTime.value = Number.isFinite(selectedTime) ? selectedTime : 0
   if (stationMode.value === 'single') {
     try {
@@ -719,16 +609,6 @@ async function confirmCalibration(): Promise<void> {
       return
     }
   }
-  const replacing = !isLiveVideo.value && !!pendingFile.value
-  if (replacing && pendingFile.value) {
-    if (activeUrl.value) URL.revokeObjectURL(activeUrl.value)
-    activeUrl.value = pendingUrl.value
-    activeVideoPath.value = pendingVideoPath.value
-    activeName.value = pendingFile.value.name
-    pendingUrl.value = ''
-    pendingVideoPath.value = ''
-    pendingFile.value = null
-  }
   calibration.value = nextCalibration
   videoWidth.value = nextCalibration.width
   videoHeight.value = nextCalibration.height
@@ -736,10 +616,10 @@ async function confirmCalibration(): Promise<void> {
   liveSnapshotUrl.value = ''
   screen.value = 'monitor'
   seekDraft.value = null
-  activeName.value = isLiveVideo.value ? sourceLabel.value : activeName.value
+  activeName.value = sourceLabel.value
   // Both file and live frames enter the same unchanged Python WaterDetector.
   await nextTick()
-  await detection.open(isLiveVideo.value ? '' : activeVideoPath.value, nextCalibration,
+  await detection.open('', nextCalibration,
     isLiveVideo.value ? 0 : calibrationFrameTime.value, isLiveVideo.value, stationMode.value)
 }
 function onMainSeek(event: Event): void {
@@ -768,8 +648,8 @@ function stop(): void { detection.pause() }
 async function retryPythonVideo(): Promise<void> {
   try {
     await window.desktop.backend.retry()
-    if (calibration.value && (activeVideoPath.value || isLiveVideo.value)) {
-      await detection.open(isLiveVideo.value ? '' : activeVideoPath.value, calibration.value,
+    if (calibration.value) {
+      await detection.open('', calibration.value,
         isLiveVideo.value ? 0 : currentTime.value, isLiveVideo.value, stationMode.value)
     }
   } catch (reason) {
@@ -837,7 +717,7 @@ async function authorizeAdministrator(password: string): Promise<void> {
     adminDialogOpen.value = false
     notify('已切换到管理员')
     void refreshAdminVideoSource()
-    if (pendingFile.value && !modalOpen.value) openCalibration(false)
+    if (!calibration.value && !modalOpen.value) void refreshStationProfile()
   } catch (reason) {
     adminError.value = userErrorText(reason)
     if (String(reason).includes('ADMIN_ALREADY_CONFIGURED')) {
@@ -878,13 +758,6 @@ async function applyVideoSourceSettings(next: VideoSourceSettings): Promise<void
     algorithmSettingsOpen.value = false
     settingsResumePlayback = false
     detection.invalidate()
-    if (activeUrl.value) URL.revokeObjectURL(activeUrl.value)
-    if (pendingUrl.value) URL.revokeObjectURL(pendingUrl.value)
-    activeUrl.value = ''
-    pendingUrl.value = ''
-    pendingVideoPath.value = ''
-    pendingFile.value = null
-    activeVideoPath.value = ''
     activeName.value = ''
     seekDraft.value = null
     notify('视频源已保存，请连接' + (saved.source.kind === 'file' ? '本地视频' : '摄像头'))
@@ -913,8 +786,8 @@ async function applyAlgorithmSettings(next: AlgorithmSettings): Promise<void> {
     const resume = settingsResumePlayback
     settingsResumePlayback = false
     notify('算法参数已应用')
-    if (calibration.value && (activeVideoPath.value || isLiveVideo.value)) {
-      await detection.open(isLiveVideo.value ? '' : activeVideoPath.value, calibration.value,
+    if (calibration.value) {
+      await detection.open('', calibration.value,
         isLiveVideo.value ? 0 : currentTime.value, resume, stationMode.value)
     }
   } catch (reason) {
@@ -957,8 +830,6 @@ onBeforeUnmount(() => {
   calibrationResizeObserver?.disconnect()
   monitorResizeObserver?.disconnect()
   if (toastTimeout) clearTimeout(toastTimeout)
-  if (activeUrl.value) URL.revokeObjectURL(activeUrl.value)
-  if (pendingUrl.value) URL.revokeObjectURL(pendingUrl.value)
 })
 </script>
 
@@ -993,15 +864,15 @@ onBeforeUnmount(() => {
     <main v-if="screen === 'welcome'" class="welcome">
       <section class="welcome-card">
         <div class="welcome-icon" aria-hidden="true"><svg viewBox="0 0 46 46"><rect x="5" y="10" width="36" height="26" rx="4"/><path d="m20 17 11 6-11 6z"/></svg></div>
-        <h1>{{ isLiveVideo ? '实时摄像头检测' : '选择检测视频' }}</h1>
-        <button type="button" class="btn btn-primary welcome-select" @click="chooseVideo">{{ isLiveVideo ? '连接摄像头' : '选择视频文件' }}</button>
+        <h1>{{ sourceLabel }}</h1>
+        <button type="button" class="btn btn-primary welcome-select" @click="chooseVideo">{{ isLiveVideo ? '连接摄像头' : '打开视频' }}</button>
       </section>
     </main>
 
     <template v-else>
       <main class="workspace">
         <section class="panel video-panel">
-          <div class="panel-heading"><span class="panel-title">检测画面</span><span v-if="stationMode === 'auto' && detectorResult" class="monitor-station-indicator">{{ detectorResult.stage === 'UNKNOWN' ? '工位未确认' : '工位 ' + (detectorResult.stage ?? '--') }}</span><div class="heading-actions"><button v-if="currentRole === 'admin'" class="btn btn-muted" @click="editCalibration">重新标注</button><button class="btn btn-muted" @click="chooseVideo">{{ isLiveVideo ? '重新连接' : '更换视频' }}</button></div></div>
+          <div class="panel-heading"><span class="panel-title">检测画面</span><span v-if="stationMode === 'auto' && detectorResult" class="monitor-station-indicator">{{ detectorResult.stage === 'UNKNOWN' ? '工位未确认' : '工位 ' + (detectorResult.stage ?? '--') }}</span><div class="heading-actions"><button v-if="currentRole === 'admin'" class="btn btn-muted" @click="editCalibration">重新标注</button><button class="btn btn-muted" @click="chooseVideo">{{ isLiveVideo ? '重新连接' : '打开视频' }}</button></div></div>
           <div class="video-stage" ref="monitorStage">
             <div class="video-fit" :style="monitorViewportStyle">
               <img v-if="renderedFrame" class="video-element" :src="renderedFrame" alt="Python 逐帧推理后的检测画面"/>
@@ -1032,7 +903,6 @@ onBeforeUnmount(() => {
       <footer class="bottom-bar"><div class="file-info"><span>视频</span><strong :title="activeName">{{ activeName }}</strong><i v-if="activeName"/><span v-if="activeName">{{ videoWidth }} × {{ videoHeight }} · {{ analysisFPS.toFixed(2) }} FPS</span></div><div class="footer-actions"><button v-if="!isLiveVideo" class="btn btn-muted" @click="restart">↻ 从头播放</button><button class="btn btn-danger" :disabled="!isPlaying" @click="stop">{{ isLiveVideo ? '■ 暂停显示' : '■ 暂停播放' }}</button><button class="btn btn-primary" :disabled="!detectionRecords.length" title="导出当前检测时段的逐帧采样数据" @click="detection.exportCSV">⇩ 导出检测结果</button></div></footer>
     </template>
 
-    <input ref="fileInput" class="hidden-input" type="file" accept="video/*,.mp4,.mov,.avi,.mkv,.webm,.m4v" aria-label="选择视频文件" @change="onFileChange"/>
     <AlgorithmSettingsModal v-if="algorithmSettingsOpen && currentRole === 'admin'" :settings="algorithmSettings" :source="videoSourceSettings" :busy="settingsBusy || archiveBusy" @cancel="cancelAlgorithmSettings" @save="applyAlgorithmSettings" @save-source="applyVideoSourceSettings" @import-profile="importDeviceProfile" @export-profile="exportDeviceProfile"/>
     <AdminAccessDialog v-if="adminDialogOpen" :configured="adminConfigured" :busy="adminBusy" :error="adminError" @cancel="adminDialogOpen = false" @submit="authorizeAdministrator"/>
     <div v-if="modalOpen && currentRole === 'admin'" class="modal-mask" @click.self="closeCalibration">
@@ -1072,9 +942,9 @@ onBeforeUnmount(() => {
             </div>
             <p v-if="stationError" class="station-error" role="alert">{{ stationError }}</p>
           </div>
-          <div ref="calibrationStage" class="calibration-stage" :class="{ 'stage-ready': !!draftWidth }"><div class="video-fit calibration-fit" :style="calibrationViewportStyle" @click="onCalibrationClick"><img v-if="isLiveVideo && liveSnapshotUrl" class="live-calibration-image" :src="liveSnapshotUrl" alt="实时摄像头抓拍画面" /><video v-if="!isLiveVideo" ref="calibrationVideo" :src="previewUrl" playsinline muted preload="metadata" @loadedmetadata="onCalibrationMetadata" @loadeddata="onCalibrationFrameReady" @timeupdate="onCalibrationTime" @seeking="calibrationFrameReady = false" @seeked="onCalibrationFrameReady" @error="notify('无法读取视频，请尝试其他格式')"/><svg ref="calibrationSvg" class="roi-overlay" :viewBox="draftOverlaySize" preserveAspectRatio="none" aria-hidden="true"><template v-if="center"><path :d="`M ${center.x-13} ${center.y} h26 M ${center.x} ${center.y-13} v26`" class="calib-cross"/><circle :cx="center.x" :cy="center.y" r="4" fill="#59d7ff"/></template><template v-if="draftCalibration"><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius" class="calib-wafer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * outerRadiusRatio" class="ring-outer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * innerRadiusRatio" class="ring-inner"/></template></svg></div></div>
-          <div v-if="isLiveVideo" class="live-calibration-controls"><span>实时抓拍标定</span><button type="button" class="btn btn-muted" :disabled="liveSnapshotBusy" @click="refreshLiveSnapshot">{{ liveSnapshotBusy ? '抓拍中…' : '刷新画面' }}</button></div>
-          <div v-else class="calib-timeline"><span>定位画面</span><input type="range" aria-label="标注画面位置" min="0" :max="calibrationDuration || 1" step="0.01" :value="calibrationTime" :style="{ '--progress': calibrationProgress + '%' }" :disabled="!calibrationDuration" @input="onCalibrationSeek"/><span>{{ formatTime(calibrationTime) }} / {{ formatTime(calibrationDuration) }}</span></div>
+          <div ref="calibrationStage" class="calibration-stage" :class="{ 'stage-ready': !!draftWidth }"><div class="video-fit calibration-fit" :style="calibrationViewportStyle" @click="onCalibrationClick"><img v-if="liveSnapshotUrl" class="live-calibration-image" :src="liveSnapshotUrl" alt="标定视频画面"/><svg ref="calibrationSvg" class="roi-overlay" :viewBox="draftOverlaySize" preserveAspectRatio="none" aria-hidden="true"><template v-if="center"><path :d="`M ${center.x-13} ${center.y} h26 M ${center.x} ${center.y-13} v26`" class="calib-cross"/><circle :cx="center.x" :cy="center.y" r="4" fill="#59d7ff"/></template><template v-if="draftCalibration"><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius" class="calib-wafer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * outerRadiusRatio" class="ring-outer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * innerRadiusRatio" class="ring-inner"/></template></svg></div></div>
+          <div v-if="isLiveVideo" class="live-calibration-controls"><button type="button" class="btn btn-muted" :disabled="liveSnapshotBusy" @click="refreshCalibrationSnapshot()">{{ liveSnapshotBusy ? '抓拍中…' : '刷新画面' }}</button></div>
+          <div v-else class="calib-timeline"><span>定位画面</span><input type="range" aria-label="标注画面位置" min="0" :max="calibrationDuration || 1" step="0.01" :value="calibrationTime" :style="{ '--progress': calibrationProgress + '%' }" :disabled="!calibrationDuration" @input="onCalibrationSeek" @change="onCalibrationSeekEnd"/><span>{{ formatTime(calibrationTime) }} / {{ formatTime(calibrationDuration) }}</span></div>
           <div class="calibration-status"><strong>{{ calibrationPhase }}</strong><span>{{ calibrationMeasure }}</span></div>
           <div v-if="coordinateCheckEnabled" class="coordinate-debug">
             <div class="coordinate-debug-heading"><span><b>坐标校验</b>　红点：鼠标实际落点　蓝色十字：绘制位置</span><button type="button" class="coordinate-copy" :disabled="!coordinateCheck" @click="copyCoordinateCheck">复制数据</button></div>
