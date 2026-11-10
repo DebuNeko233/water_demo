@@ -8,7 +8,7 @@ import cv2
 from sample_backend.services.water_session import InvalidFrame, SessionExpired
 from sample_backend.services.user_access import AccessDenied
 from sample_backend.services.video_stream import (
-    VideoOpenInput, VideoNextInput, VideoSeekInput,
+    VideoOpenInput, VideoNextInput, VideoSeekInput, VideoStopInput,
     VideoDimensionsMismatch, VideoDimensionsTooLarge,
 )
 from sample_backend.services.video_source import VideoSourceSettings, open_capture
@@ -58,6 +58,15 @@ def video_seek(req: VideoSeekInput, request: Request) -> dict:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except InvalidFrame as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post('/stop')
+def video_stop(req: VideoStopInput, request: Request) -> dict:
+    try:
+        request.app.state.video_stream.stop(req.session_id)
+        return {'stopped': True}
+    except SessionExpired as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 class VideoSourceAdminInput(BaseModel):
