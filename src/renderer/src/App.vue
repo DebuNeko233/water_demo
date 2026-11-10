@@ -296,13 +296,14 @@ async function startConfiguredSource(): Promise<void> {
     ? stationProfile.value.stages.P1.calibration : null
   const preferred = stationMode.value === 'auto'
     ? auto : (calibration.value ?? stationProfile.value?.single_calibration ?? null)
-  const chosen = preferred ?? auto
+  const single = stationProfile.value?.single_calibration ?? null
+  const chosen = preferred ?? auto ?? single
   if (!chosen) {
     notify('请切换管理员完成当前摄像头的晶圆标注')
     if (currentRole.value === 'admin' && adminToken.value) openCalibration(false)
     return
   }
-  const mode: StageMode = preferred ? stationMode.value : 'auto'
+  const mode: StageMode = preferred ? stationMode.value : (auto ? 'auto' : 'single')
   stationMode.value = mode
   calibration.value = chosen
   activeName.value = sourceLabel.value
@@ -363,6 +364,10 @@ async function onFileChange(event: Event): Promise<void> {
     if (!reused && readyAutoCalibration) {
       reused = readyAutoCalibration
       mode = 'auto'
+    }
+    if (!reused && stationProfile.value?.single_calibration) {
+      reused = stationProfile.value.single_calibration
+      mode = 'single'
     }
     if (!reused) {
       if (pendingUrl.value) URL.revokeObjectURL(pendingUrl.value)
