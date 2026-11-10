@@ -41,6 +41,12 @@ class StageReferenceInput(BaseModel):
     group: Literal['default', 'nozzle_a', 'nozzle_b'] = 'default'
 
 
+class StageLiveReferenceInput(BaseModel):
+    stage: str
+    group: Literal['default', 'nozzle_a', 'nozzle_b'] = 'default'
+    admin_token: str = Field(min_length=1, max_length=128)
+
+
 class StageRemoveReferenceInput(BaseModel):
     stage: str
     reference_id: str = Field(min_length=1, max_length=64)
@@ -276,6 +282,39 @@ class StageProfileStore:
                 return self.snapshot()
             finally:
                 cap.release()
+
+    def capture_live(self, req: StageLiveReferenceInput,
+                     frame: np.ndarray, source_label: str) -> dict:
+        """Save a raw camera frame, not a lossy preview screenshot."""
+        stage = self._stage(req.stage)
+        group = 'nozzle_a' if stage == 'P3' and req.group == 'default' else req.group
+        if group not in (('nozzle_a', 'nozzle_b') if stage == 'P3' else ('default',)):
+            raise InvalidFrame('只有 P3 可以选择喷头 A/B')
+        height, width = frame.shape[:2]
+        with self._lock:
+            entry = self._profile['stages'][stage]
+            calibration = entry['calibration']
+            if calibration is None:
+                raise InvalidFrame('请先保存该工位晶圆 ROI')
+            if (width, height) != (calibration['width'], calibration['height']):
+                raise InvalidFrame('摄像头分辨率与该工位标定不一致')
+            if len(entry['references']) >= MAX_REFS:
+                raise InvalidFrame('每个工位最多 12 张参考图')
+            ok, encoded = cv2.imencode('.png', frame)
+            if not ok:
+                raise InvalidFrame('参考帧编码失败')
+            ident = uuid4().hex
+            filename = self.root / (ident + '.png')
+            filename.write_bytes(encoded.tobytes())
+            ref = {'id': ident, 'time_s': 0.0, 'source': source_label, 'group': group}
+            entry['references'].append(ref)
+            try:
+                self._save()
+            except Exception:
+                entry['references'].pop()
+                filename.unlink(missing_ok=True)
+                raise
+            return self.snapshot()
 
     def remove_reference(self, req: StageRemoveReferenceInput) -> dict:
         stage = self._stage(req.stage)
