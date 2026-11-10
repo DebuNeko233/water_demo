@@ -49,11 +49,21 @@ def _normalise_profile(raw: object) -> tuple[dict, dict[str, tuple[int, int]]]:
         normalized['single_calibration'] = CalibrationInput.model_validate(
             raw['single_calibration']).model_dump()
     image_sizes: dict[str, tuple[int, int]] = {}
+    legacy_single_only = (
+        raw.get('single_calibration') is not None and
+        not any(stages[key].get('calibration') for key in STAGES) and
+        not any('enabled' in stages[key] for key in STAGES)
+    )
     for stage in STAGES:
         entry = stages[stage]
         if not isinstance(entry, dict):
             raise InvalidFrame("工位配置格式错误")
+        enabled = entry.get('enabled', stage == 'P1' if legacy_single_only else True)
+        if not isinstance(enabled, bool):
+            raise InvalidFrame('工位启用状态不合法')
         original_cal = entry.get("calibration")
+        if legacy_single_only and stage == 'P1':
+            original_cal = raw['single_calibration']
         cal = None if original_cal is None else CalibrationInput.model_validate(original_cal).model_dump()
         if cal is not None:
             if not all(math.isfinite(cal[k]) for k in ("cx", "cy", "radius")):
@@ -86,7 +96,9 @@ def _normalise_profile(raw: object) -> tuple[dict, dict[str, tuple[int, int]]]:
             out_refs.append({"id": ident, "time_s": time_s,
                              "source": name, "group": group})
             image_sizes[ident] = (cal["width"], cal["height"])
-        normalized["stages"][stage] = {"calibration": cal, "references": out_refs}
+        normalized["stages"][stage] = {
+            "enabled": enabled, "calibration": cal, "references": out_refs
+        }
     return normalized, image_sizes
 
 
