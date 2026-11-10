@@ -58,7 +58,7 @@ test('P3 has independent nozzle A/B reference selectors for a shared ROI', () =>
   assert.ok(app.includes("selectedP3Nozzle = ref"))
   assert.ok(app.includes('喷头 A'))
   assert.ok(app.includes('喷头 B'))
-  assert.ok(app.includes('captureStationReference(selectedStation.value, file, time, group)'))
+  assert.ok(app.includes('captureStationReference(selectedStation.value, file, time, group, adminToken.value)'))
   assert.ok(service.includes('group?: ReferenceGroup'))
   assert.ok(service.includes('time_s: timeS, group'))
   const backendStation = read('backend/src/sample_backend/services/station_position.py')
