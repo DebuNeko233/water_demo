@@ -155,7 +155,8 @@ export function usePythonVideoStream() {
       if (epoch !== version) return
       status.value = 'error'
       const failure = describeVideoOpenError(reason)
-      openIssue.value = failure.kind === 'other' ? null : failure.kind
+      openIssue.value =
+        failure.kind === 'mismatch' || failure.kind === 'oversize' ? failure.kind : null
       error.value = failure.message
     }
   }
