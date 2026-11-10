@@ -605,34 +605,43 @@ function closeCalibration(): void {
   if (screen.value === 'monitor' && previouslyPlaying) detection.play()
 }
 async function confirmCalibration(): Promise<void> {
-  if (currentRole.value !== 'admin' || !adminToken.value || !readyToConfirm.value) return
-  const nextCalibration = stationMode.value === 'auto'
-    ? stationProfile.value?.stages.P1.calibration
-    : draftCalibration.value
-  if (!nextCalibration) return
+  if (currentRole.value !== 'admin' || !adminToken.value ||
+      !readyToConfirm.value || !draftCalibration.value) return
+  stationError.value = ''
+  stationBusy.value = true
+  try {
+    stationProfile.value = await saveStationCalibration(
+      selectedStation.value, draftCalibration.value, adminToken.value)
+  } catch {
+    stationError.value = '工位 ROI 保存失败'
+    return
+  } finally {
+    stationBusy.value = false
+  }
+  const profile = stationProfile.value
+  if (!profile?.ready) {
+    stationError.value = enabledStageCount.value > 1
+      ? '请完成所有已启用工位的 ROI 和参考帧'
+      : '请完成已启用工位的 ROI'
+    return
+  }
+  const active = profile.enabled_stages[0]
+  const chosen = profile.stages[active].calibration
+  if (!chosen) return
   const selectedTime = calibrationTime.value
   calibrationFrameTime.value = Number.isFinite(selectedTime) ? selectedTime : 0
-  if (stationMode.value === 'single') {
-    try {
-      stationProfile.value = await saveSingleCalibration(nextCalibration, adminToken.value)
-    } catch (error) {
-      stationError.value = '保存单工位标定失败：' + String(error)
-      return
-    }
-  }
-  calibration.value = nextCalibration
-  videoWidth.value = nextCalibration.width
-  videoHeight.value = nextCalibration.height
+  calibration.value = chosen
+  videoWidth.value = chosen.width
+  videoHeight.value = chosen.height
   modalOpen.value = false
   liveSnapshotUrl.value = ''
   screen.value = 'monitor'
   seekDraft.value = null
   activeName.value = sourceLabel.value
-  // Both file and live frames enter the same unchanged Python WaterDetector.
   await nextTick()
-  await detection.open('', nextCalibration,
+  await detection.open('', chosen,
     isLiveVideo.value ? 0 : calibrationFrameTime.value,
-    previouslyPlaying || !hasDetectionSession.value, stationMode.value,
+    previouslyPlaying || !hasDetectionSession.value, 'configured',
     calibrationWasDetecting)
 }
 function onMainSeek(event: Event): void {
@@ -917,7 +926,7 @@ onBeforeUnmount(() => {
     <template v-else>
       <main class="workspace">
         <section class="panel video-panel">
-          <div class="panel-heading"><span class="panel-title">检测画面</span><span v-if="stationMode === 'auto' && detectorResult" class="monitor-station-indicator">{{ detectorResult.stage === 'UNKNOWN' ? '工位未确认' : '工位 ' + (detectorResult.stage ?? '--') }}</span><div class="heading-actions"><button v-if="currentRole === 'admin'" class="btn btn-muted" @click="editCalibration">重新标注</button><button class="btn btn-muted" @click="chooseVideo">{{ isLiveVideo ? '重新连接' : '打开视频' }}</button></div></div>
+          <div class="panel-heading"><span class="panel-title">检测画面</span><span v-if="enabledStageCount > 1 && detectorResult" class="monitor-station-indicator">{{ detectorResult.stage === 'UNKNOWN' ? '工位未确认' : '工位 ' + (detectorResult.stage ?? '--') }}</span><div class="heading-actions"><button v-if="currentRole === 'admin'" class="btn btn-muted" @click="editCalibration">重新标注</button><button class="btn btn-muted" @click="chooseVideo">{{ isLiveVideo ? '重新连接' : '打开视频' }}</button></div></div>
           <div class="video-stage" ref="monitorStage">
             <div class="video-fit" :style="monitorViewportStyle">
               <img v-if="renderedFrame" class="video-element" :src="renderedFrame" alt="Python 逐帧推理后的检测画面"/>
@@ -964,30 +973,30 @@ onBeforeUnmount(() => {
       <section class="calibration-modal" role="dialog" aria-modal="true" aria-labelledby="calibration-title">
         <div class="modal-header"><div><h2 id="calibration-title">标注晶圆位置</h2></div><div class="modal-header-actions"><button v-if="false" type="button" class="coordinate-toggle" :aria-pressed="coordinateCheckEnabled" @click="coordinateCheckEnabled = !coordinateCheckEnabled">{{ coordinateCheckEnabled ? '坐标校验：开' : '坐标校验：关' }}</button><button type="button" class="modal-close" title="取消标注" aria-label="取消标注" @click="closeCalibration">×</button></div></div>
         <div class="modal-body">
-          <div class="station-mode-tabs" role="group" aria-label="工位标定模式">
-            <button type="button" :class="{ active: stationMode === 'single' }" @click="chooseStationMode('single')">单工位</button>
-            <button type="button" :class="{ active: stationMode === 'auto' }" @click="chooseStationMode('auto')">三工位自动</button>
-          </div>
           <div v-if="currentRole === 'admin'" class="station-archive-actions" role="group" aria-label="设备配置导入导出">
             <button type="button" class="btn btn-muted" :disabled="archiveBusy || stationBusy" @click="exportDeviceProfile">导出设备配置 ZIP</button>
             <button type="button" class="btn btn-muted" :disabled="archiveBusy || stationBusy" @click="importDeviceProfile">导入设备配置 ZIP</button>
           </div>
-          <p v-if="stationMode !== 'auto' && stationError" class="station-error" role="alert">{{ stationError }}</p>
-          <div v-if="stationMode === 'auto'" class="station-setup">
+          <div class="station-setup">
             <div class="station-tabs" role="group" aria-label="选择晶圆工位">
-              <button v-for="stage in STAGES" :key="stage" type="button" :class="{ active: selectedStation === stage }" @click="selectStation(stage)">
-                {{ stage }} <small>{{ stationProfile?.stages[stage].references.length ?? 0 }}/{{ currentStageMin }}</small>
-              </button>
+              <div v-for="stage in STAGES" :key="stage" class="station-tab-item">
+                <button type="button" :class="{ active: selectedStation === stage }" @click="selectStation(stage)">
+                  {{ stage }} <small v-if="enabledStageCount > 1">{{ stationProfile?.stages[stage].references.length ?? 0 }}/{{ currentStageMin }}</small>
+                </button>
+                <label class="station-enabled-switch" :title="stage + ' 工位启用'">
+                  <input type="checkbox" :aria-label="stage + ' 工位启用'" :checked="stationProfile?.stages[stage].enabled ?? false" :disabled="stationBusy || archiveBusy" @change="toggleStationEnabled(stage)"/>
+                  <span>启用</span>
+                </label>
+              </div>
             </div>
-            <div v-if="selectedStation === 'P3'" class="station-nozzle-tabs" role="group" aria-label="P3 喷头参考帧组">
+            <div v-if="selectedStation === 'P3' && enabledStageCount > 1" class="station-nozzle-tabs" role="group" aria-label="P3 喷头参考帧组">
               <button type="button" :class="{ active: selectedP3Nozzle === 'nozzle_a' }" @click="selectedP3Nozzle = 'nozzle_a'">喷头 A · {{ p3NozzleACount }} 张</button>
               <button type="button" :class="{ active: selectedP3Nozzle === 'nozzle_b' }" @click="selectedP3Nozzle = 'nozzle_b'">喷头 B · {{ p3NozzleBCount }} 张</button>
             </div>
             <div class="station-reference-controls">
-              <button type="button" class="btn btn-primary" :disabled="!draftCalibration || stationBusy || (selectedStageConfig?.references.length ?? 0) >= 12" @click="captureCurrentReference">
-                {{ stationBusy ? '采集中…' : '保存 ROI 并采集当前帧' }}
-              </button>
-              <span>{{ selectedStation === 'P3' ? '同一 P3 ROI，每种喷头分别采集至少 ' + currentStageMin + ' 张参考帧' : '每个工位至少 ' + currentStageMin + ' 张不同画面的参考帧' }}</span>
+              <button type="button" class="btn btn-muted" :disabled="!draftCalibration || stationBusy" @click="saveCurrentRoi">保存当前工位 ROI</button>
+              <button v-if="enabledStageCount > 1" type="button" class="btn btn-primary" :disabled="!draftCalibration || stationBusy || (selectedStageConfig?.references.length ?? 0) >= 12" @click="captureCurrentReference">采集参考帧</button>
+              <span v-if="enabledStageCount > 1">{{ selectedStation === 'P3' ? '每种喷头至少 ' + currentStageMin + ' 张' : '每个已启用工位至少 ' + currentStageMin + ' 张参考帧' }}</span>
             </div>
             <div v-if="currentStageReferences.length" class="station-reference-list">
               <span v-for="refItem in currentStageReferences" :key="refItem.id" class="station-reference-chip">
@@ -1014,7 +1023,7 @@ onBeforeUnmount(() => {
             <div v-else class="coordinate-debug-hint">请先点击画面中的晶圆中心</div>
           </div>
         </div>
-        <div class="modal-footer"><span>{{ stationMode === 'auto' ? (stationProfile?.ready ? '三工位已就绪' : '请完成三个工位的 ROI 与参考帧') : calibrationPhase }}</span><div><button class="btn btn-muted" :disabled="!center" @click="resetDraft">重置</button><button class="btn btn-primary" :disabled="!readyToConfirm" @click="confirmCalibration">确认</button></div></div>
+        <div class="modal-footer"><span>{{ stationProfile?.ready ? '已启用工位就绪' : '请完成已启用工位的标定' }}</span><div><button class="btn btn-muted" :disabled="!center" @click="resetDraft">重置</button><button class="btn btn-primary" :disabled="!readyToConfirm" @click="confirmCalibration">确认</button></div></div>
       </section>
       <template v-if="coordinateCheckEnabled">
         <div v-for="(marker, index) in clickMarkers" :key="index" class="raw-click-marker" :class="{ 'marker-edge': marker.kind === '边缘' }" :style="{ left: marker.x + 'px', top: marker.y + 'px' }"><span>{{ marker.kind }}点击</span></div>
