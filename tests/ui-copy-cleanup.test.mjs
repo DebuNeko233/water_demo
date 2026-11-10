@@ -56,6 +56,9 @@ test('monitor video action is icon-only, accessible, and maintains live reconnec
   assert.match(button, /<svg v-if="isLiveVideo"/)
   assert.match(button, /<svg v-else/)
   assert.doesNotMatch(button, />\s*\{\{\s*isLiveVideo/)
+  const smoke = readFileSync(path.join(root, 'src/main/index.ts'), 'utf8')
+  assert.match(smoke, /btn\.getAttribute\('aria-label'\) === '打开视频'/)
+  assert.doesNotMatch(smoke, /btn\.textContent\?\.trim\(\) === '打开视频'/)
 })
 
 test('monitor four data cells scale typography while retaining the responsive grid', () => {
