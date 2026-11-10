@@ -129,7 +129,8 @@ const draftCalibration = computed<Calibration | null>(() =>
 )
 const enabledStageCount = computed(() => stationProfile.value?.enabled_stages.length ?? 0)
 const readyToConfirm = computed(() =>
-  !!draftCalibration.value && enabledStageCount.value > 0 && !stationBusy.value,
+  enabledStageCount.value > 0 && !stationBusy.value &&
+  (!!stationProfile.value?.ready || !!draftCalibration.value),
 )
 const selectedStageConfig = computed(() => stationProfile.value?.stages[selectedStation.value])
 const currentStageReferences = computed(() => (selectedStageConfig.value?.references ?? []).filter(refItem =>
@@ -606,17 +607,21 @@ function closeCalibration(): void {
 }
 async function confirmCalibration(): Promise<void> {
   if (currentRole.value !== 'admin' || !adminToken.value ||
-      !readyToConfirm.value || !draftCalibration.value) return
+      !readyToConfirm.value) return
   stationError.value = ''
-  stationBusy.value = true
-  try {
-    stationProfile.value = await saveStationCalibration(
-      selectedStation.value, draftCalibration.value, adminToken.value)
-  } catch {
-    stationError.value = '工位 ROI 保存失败'
-    return
-  } finally {
-    stationBusy.value = false
+  // Switches are persisted immediately. An already-ready subset can be
+  // confirmed without forcing the operator to redraw a disabled station.
+  if (draftCalibration.value) {
+    stationBusy.value = true
+    try {
+      stationProfile.value = await saveStationCalibration(
+        selectedStation.value, draftCalibration.value, adminToken.value)
+    } catch {
+      stationError.value = '工位 ROI 保存失败'
+      return
+    } finally {
+      stationBusy.value = false
+    }
   }
   const profile = stationProfile.value
   if (!profile?.ready) {
@@ -981,7 +986,7 @@ onBeforeUnmount(() => {
             <div class="station-tabs" role="group" aria-label="选择晶圆工位">
               <div v-for="stage in STAGES" :key="stage" class="station-tab-item">
                 <button type="button" :class="{ active: selectedStation === stage }" @click="selectStation(stage)">
-                  {{ stage }} <small v-if="enabledStageCount > 1">{{ stationProfile?.stages[stage].references.length ?? 0 }}/{{ currentStageMin }}</small>
+                  {{ stage }} <small v-if="enabledStageCount > 1 && stationProfile?.stages[stage].enabled">{{ stationProfile?.stages[stage].references.length ?? 0 }}/{{ currentStageMin }}</small>
                 </button>
                 <label class="station-enabled-switch" :title="stage + ' 工位启用'">
                   <input type="checkbox" :aria-label="stage + ' 工位启用'" :checked="stationProfile?.stages[stage].enabled ?? false" :disabled="stationBusy || archiveBusy" @change="toggleStationEnabled(stage)"/>
