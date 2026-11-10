@@ -3,8 +3,18 @@ import { toPlainCalibration } from './detection-payload.mjs'
 import type { DetectionResult, WaferCalibration } from './water-detection'
 import type { StageMode } from './station-profile'
 
+export interface FramePerformance {
+  frames: number
+  decode_ms: number
+  analysis_ms: number
+  preview_ms: number
+}
+
 export interface AnnotatedFrame {
   ended: boolean
+  /** Intermediate results for file batches; all decoded frames were scored. */
+  samples?: DetectionResult[]
+  performance?: FramePerformance
   frame_index?: number
   time_s?: number
   jpeg_base64?: string
@@ -35,8 +45,10 @@ export function openPythonVideo(
     // last administrator-approved settings for every operator session.
   })
 }
-export function readPythonVideoFrame(sessionId: string): Promise<AnnotatedFrame> {
-  return window.desktop.backend.request<AnnotatedFrame>('POST', '/api/video/next', { session_id: sessionId })
+export function readPythonVideoFrame(sessionId: string, batchFrames = 1): Promise<AnnotatedFrame> {
+  return window.desktop.backend.request<AnnotatedFrame>('POST', '/api/video/next', {
+    session_id: sessionId, batch_frames: batchFrames,
+  })
 }
 export function seekPythonVideo(sessionId: string, timeS: number): Promise<AnnotatedFrame> {
   return window.desktop.backend.request<AnnotatedFrame>('POST', '/api/video/seek', {
