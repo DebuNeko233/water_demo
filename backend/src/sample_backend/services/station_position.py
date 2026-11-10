@@ -29,12 +29,14 @@ MAX_REFS = 12
 class StageCalibrationInput(BaseModel):
     stage: str
     calibration: CalibrationInput
+    admin_token: str | None = Field(default=None, max_length=128)
 
 
 class StageReferenceInput(BaseModel):
     stage: str
     file_path: str = Field(min_length=1, max_length=4096)
     time_s: float = Field(ge=0, le=86400, allow_inf_nan=False)
+    admin_token: str | None = Field(default=None, max_length=128)
     # P3 can have two physical nozzles with distinct reference appearances.
     group: Literal['default', 'nozzle_a', 'nozzle_b'] = 'default'
 
@@ -42,6 +44,7 @@ class StageReferenceInput(BaseModel):
 class StageRemoveReferenceInput(BaseModel):
     stage: str
     reference_id: str = Field(min_length=1, max_length=64)
+    admin_token: str | None = Field(default=None, max_length=128)
 
 
 class StageResetInput(BaseModel):
