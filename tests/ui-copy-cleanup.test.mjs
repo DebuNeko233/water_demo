@@ -25,7 +25,7 @@ test('normal monitor UI omits redundant prose while preserving useful controls',
   ]
   for (const phrase of removed) assert.ok(!app.includes(phrase), 'Redundant UI text: ' + phrase)
   for (const essential of [
-    '标注晶圆位置', '重新标注', '更换视频', 'S_water', 'NG 阈值',
+    '标注晶圆位置', '重新标注', '打开视频', 'S_water', 'NG 阈值',
     '导出检测结果', '确认', '系统设置', 'videoError', 'calibrationPhase',
   ]) assert.ok(app.includes(essential), 'Essential UI text missing: ' + essential)
   assert.match(app, /v-if="resultStatus === 'ERROR' \|\| resultStatus === '连接中' \|\| resultStatus === 'WARMUP' \|\| resultStatus === 'PAUSED'"/)
