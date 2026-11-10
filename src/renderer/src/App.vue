@@ -5,7 +5,7 @@ import { svgSourceToClient } from './utils/svgCoordinates.mjs'
 import { calibrationPointerToSource } from './utils/calibrationPointer.mjs'
 import { usePythonVideoStream } from './composables/usePythonVideoStream'
 import {
-  STAGES, getStationProfile, saveStationCalibration,
+  STAGES, getStationProfile, saveStationCalibration, saveSingleCalibration,
   captureStationReference, removeStationReference, captureLiveStationReference,
   exportStationArchive, importStationArchive,
   type StageKey, type StageMode, type StationProfile, type ReferenceGroup,
@@ -294,7 +294,8 @@ async function startConfiguredSource(): Promise<void> {
   if (!stationProfile.value) await refreshStationProfile()
   const auto = stationProfile.value?.ready
     ? stationProfile.value.stages.P1.calibration : null
-  const preferred = stationMode.value === 'auto' ? auto : calibration.value
+  const preferred = stationMode.value === 'auto'
+    ? auto : (calibration.value ?? stationProfile.value?.single_calibration ?? null)
   const chosen = preferred ?? auto
   if (!chosen) {
     notify('请切换管理员完成当前摄像头的晶圆标注')
@@ -356,7 +357,7 @@ async function onFileChange(event: Event): Promise<void> {
     const readyAutoCalibration = stationProfile.value?.ready
       ? stationProfile.value.stages.P1.calibration : null
     let reused = stationMode.value === 'auto'
-      ? readyAutoCalibration : calibration.value
+      ? readyAutoCalibration : (calibration.value ?? stationProfile.value?.single_calibration ?? null)
     let mode: StageMode = stationMode.value
     if (!reused && readyAutoCalibration) {
       reused = readyAutoCalibration
@@ -411,6 +412,9 @@ async function refreshStationProfile(): Promise<void> {
   try {
     const profile = await getStationProfile()
     stationProfile.value = profile
+    if (!calibration.value && profile.single_calibration) {
+      calibration.value = profile.single_calibration
+    }
     if (!stationProfileInitialized) {
       stationProfileInitialized = true
       const hasReferences = STAGES.some(s => profile.stages[s].references.length > 0)
@@ -468,7 +472,9 @@ async function importDeviceProfile(): Promise<void> {
     stationProfile.value = imported.profile
     algorithmSettings.value = copyAlgorithmSettings(imported.settings)
     stationProfileInitialized = true
-    stationMode.value = 'auto'
+    stationMode.value = imported.profile.ready ? 'auto' : 'single'
+    calibration.value = imported.profile.single_calibration
+      ?? imported.profile.stages.P1.calibration ?? null
     selectStation('P1')
     notify('设备配置已导入（' + imported.reference_count + ' 张参考帧），请确认后重新检测')
   } catch (error) {
@@ -697,6 +703,14 @@ async function confirmCalibration(): Promise<void> {
   if (!nextCalibration) return
   const selectedTime = calibrationVideo.value?.currentTime ?? calibrationTime.value
   calibrationFrameTime.value = Number.isFinite(selectedTime) ? selectedTime : 0
+  if (stationMode.value === 'single') {
+    try {
+      stationProfile.value = await saveSingleCalibration(nextCalibration, adminToken.value)
+    } catch (error) {
+      stationError.value = '保存单工位标定失败：' + String(error)
+      return
+    }
+  }
   const replacing = !isLiveVideo.value && !!pendingFile.value
   if (replacing && pendingFile.value) {
     if (activeUrl.value) URL.revokeObjectURL(activeUrl.value)
