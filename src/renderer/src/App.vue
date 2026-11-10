@@ -813,6 +813,7 @@ async function authorizeAdministrator(password: string): Promise<void> {
     currentRole.value = 'admin'
     adminDialogOpen.value = false
     notify('已切换到管理员')
+    void refreshAdminVideoSource()
     if (pendingFile.value && !modalOpen.value) openCalibration(false)
   } catch (reason) {
     adminError.value = userErrorText(reason)
@@ -830,6 +831,7 @@ function openAlgorithmSettings(): void {
   settingsResumePlayback = isPlaying.value
   detection.pause()
   algorithmSettingsOpen.value = true
+  void refreshAdminVideoSource()
 }
 function resumeAfterSettings(): void {
   const resume = settingsResumePlayback
@@ -840,6 +842,31 @@ function cancelAlgorithmSettings(): void {
   algorithmSettingsOpen.value = false
   resumeAfterSettings()
 }
+async function applyVideoSourceSettings(next: VideoSourceSettings): Promise<void> {
+  if (settingsBusy.value || currentRole.value !== 'admin' || !adminToken.value) return
+  settingsBusy.value = true
+  try {
+    const saved = await saveVideoSource(next, adminToken.value)
+    videoSourceSettings.value = saved.source
+    videoSource.value = {
+      kind: saved.source.kind,
+      usb_index: saved.source.usb_index,
+    }
+    algorithmSettingsOpen.value = false
+    settingsResumePlayback = false
+    detection.invalidate()
+    activeVideoPath.value = ''
+    activeName.value = ''
+    seekDraft.value = null
+    notify('视频源已保存，请连接' + (saved.source.kind === 'file' ? '本地视频' : '摄像头'))
+  } catch (error) {
+    notify('视频源保存失败：' + String(error))
+    if (String(error).includes('ADMIN_REQUIRED')) resetToOperator()
+  } finally {
+    settingsBusy.value = false
+  }
+}
+
 async function applyAlgorithmSettings(next: AlgorithmSettings): Promise<void> {
   if (settingsBusy.value) return
   if (currentRole.value !== 'admin' || !adminToken.value) {
@@ -855,8 +882,9 @@ async function applyAlgorithmSettings(next: AlgorithmSettings): Promise<void> {
     const resume = settingsResumePlayback
     settingsResumePlayback = false
     notify('算法参数已应用')
-    if (calibration.value && activeVideoPath.value) {
-      await detection.open(activeVideoPath.value, calibration.value, currentTime.value, resume, stationMode.value)
+    if (calibration.value && (activeVideoPath.value || isLiveVideo.value)) {
+      await detection.open(isLiveVideo.value ? '' : activeVideoPath.value, calibration.value,
+        isLiveVideo.value ? 0 : currentTime.value, resume, stationMode.value)
     }
   } catch (reason) {
     notify(userErrorText(reason))
@@ -876,6 +904,7 @@ onMounted(() => {
   window.addEventListener('keydown', onEscape)
   void refreshUserStatus()
   void refreshStationProfile()
+  void refreshVideoSource()
   if (window.desktop?.backend) {
     unsubscribeBackendStatus = window.desktop.backend.onStatus((status) => {
       if (status === 'ready') {
@@ -883,6 +912,7 @@ onMounted(() => {
         resetToOperator()
         void refreshUserStatus()
         void refreshStationProfile()
+        void refreshVideoSource()
       } else if (status === 'offline' || status === 'failed') {
         resetToOperator()
       }
@@ -910,12 +940,12 @@ onBeforeUnmount(() => {
       </div>
       <div class="app-title">ZeboVision湿法清洗检测系统</div>
       <div class="header-actions">
-        <span v-if="screen === 'monitor'" class="header-status"><i class="status-dot"/>本地视频</span>
+        <span v-if="screen === 'monitor'" class="header-status"><i class="status-dot"/>{{ sourceLabel }}</span>
         <button type="button" class="role-switch" :title="currentRole === 'admin' ? '退出管理员' : '切换管理员'" :aria-label="currentRole === 'admin' ? '退出管理员' : '切换管理员'" @click="switchUser">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></svg>
           <span>{{ currentRole === 'admin' ? '管理员' : '操作员' }}</span>
         </button>
-        <button v-if="screen === 'monitor' && currentRole === 'admin'" type="button" class="algorithm-gear" title="算法参数设置" aria-label="算法参数设置" @click="openAlgorithmSettings">
+        <button v-if="screen === 'monitor' && currentRole === 'admin'" type="button" class="algorithm-gear" title="系统设置" aria-label="系统设置" @click="openAlgorithmSettings">
           <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <path d="M9.671 4.136a2 2 0 0 1 4.659 0 2 2 0 0 0 2.892 1.67 2 2 0 0 1 2.33 4.033 2 2 0 0 0 0 3.34 2 2 0 0 1-2.33 4.034 2 2 0 0 0-2.892 1.67 2 2 0 0 1-4.66 0 2 2 0 0 0-2.89-1.67 2 2 0 0 1-2.33-4.033 2 2 0 0 0 0-3.34A2 2 0 0 1 6.78 5.805a2 2 0 0 0 2.891-1.67Z"/>
             <circle cx="12" cy="11.5" r="3"/>
@@ -932,15 +962,15 @@ onBeforeUnmount(() => {
     <main v-if="screen === 'welcome'" class="welcome">
       <section class="welcome-card">
         <div class="welcome-icon" aria-hidden="true"><svg viewBox="0 0 46 46"><rect x="5" y="10" width="36" height="26" rx="4"/><path d="m20 17 11 6-11 6z"/></svg></div>
-        <h1>选择检测视频</h1>
-        <button type="button" class="btn btn-primary welcome-select" @click="chooseVideo">选择视频文件</button>
+        <h1>{{ isLiveVideo ? '实时摄像头检测' : '选择检测视频' }}</h1>
+        <button type="button" class="btn btn-primary welcome-select" @click="chooseVideo">{{ isLiveVideo ? '连接摄像头' : '选择视频文件' }}</button>
       </section>
     </main>
 
     <template v-else>
       <main class="workspace">
         <section class="panel video-panel">
-          <div class="panel-heading"><span class="panel-title">检测画面</span><span v-if="stationMode === 'auto' && detectorResult" class="monitor-station-indicator">{{ detectorResult.stage === 'UNKNOWN' ? '工位未确认' : '工位 ' + (detectorResult.stage ?? '--') }}</span><div class="heading-actions"><button v-if="currentRole === 'admin'" class="btn btn-muted" @click="editCalibration">重新标注</button><button class="btn btn-muted" @click="chooseVideo">更换视频</button></div></div>
+          <div class="panel-heading"><span class="panel-title">检测画面</span><span v-if="stationMode === 'auto' && detectorResult" class="monitor-station-indicator">{{ detectorResult.stage === 'UNKNOWN' ? '工位未确认' : '工位 ' + (detectorResult.stage ?? '--') }}</span><div class="heading-actions"><button v-if="currentRole === 'admin'" class="btn btn-muted" @click="editCalibration">重新标注</button><button class="btn btn-muted" @click="chooseVideo">{{ isLiveVideo ? '重新连接' : '更换视频' }}</button></div></div>
           <div class="video-stage" ref="monitorStage">
             <div class="video-fit" :style="monitorViewportStyle">
               <img v-if="renderedFrame" class="video-element" :src="renderedFrame" alt="Python 逐帧推理后的检测画面"/>
@@ -953,9 +983,12 @@ onBeforeUnmount(() => {
               </div>
             </div>
           </div>
-          <div class="video-footer">
-            <input class="progress-range" type="range" aria-label="视频播放进度" min="0" :max="duration || 1" step="0.01" :value="shownTime" :style="{ '--progress': progress + '%' }" :disabled="!duration" @input="onMainSeek" @change="onMainSeekEnd"/>
-            <div class="playback"><div class="playback-left"><button title="后退 5 秒" aria-label="后退 5 秒" @click="jump(-5)">↶</button><button :title="isPlaying ? '暂停' : '播放'" :aria-label="isPlaying ? '暂停' : '播放'" @click="togglePlay">{{ isPlaying ? 'Ⅱ' : '▶' }}</button><button title="前进 5 秒" aria-label="前进 5 秒" @click="jump(5)">↷</button><span>{{ formatTime(shownTime) }} / {{ formatTime(duration) }}</span></div></div>
+          <div class="video-footer" :class="{ 'video-footer-live': isLiveVideo }">
+            <template v-if="!isLiveVideo">
+              <input class="progress-range" type="range" aria-label="视频播放进度" min="0" :max="duration || 1" step="0.01" :value="shownTime" :style="{ '--progress': progress + '%' }" :disabled="!duration" @input="onMainSeek" @change="onMainSeekEnd"/>
+              <div class="playback"><div class="playback-left"><button title="后退 5 秒" aria-label="后退 5 秒" @click="jump(-5)">↶</button><button :title="isPlaying ? '暂停' : '播放'" :aria-label="isPlaying ? '暂停' : '播放'" @click="togglePlay">{{ isPlaying ? 'Ⅱ' : '▶' }}</button><button title="前进 5 秒" aria-label="前进 5 秒" @click="jump(5)">↷</button><span>{{ formatTime(shownTime) }} / {{ formatTime(duration) }}</span></div></div>
+            </template>
+            <div v-else class="playback live-playback"><div class="playback-left"><span class="live-label">● 实时画面</span><button :title="isPlaying ? '暂停显示' : '恢复显示'" :aria-label="isPlaying ? '暂停显示' : '恢复显示'" @click="togglePlay">{{ isPlaying ? 'Ⅱ' : '▶' }}</button><span>已运行 {{ formatTime(currentTime) }} · {{ isPlaying ? '监测中' : '显示已暂停' }}</span></div></div>
           </div>
         </section>
 
@@ -965,11 +998,11 @@ onBeforeUnmount(() => {
           <section class="panel chart-panel"><div class="panel-heading"><span class="panel-title">S_water 历史曲线</span><span class="chart-legend"><i/> S_water　 <b>┄</b> NG 阈值</span></div><div class="chart-body"><svg viewBox="0 0 520 140" preserveAspectRatio="none" role="img" aria-label="实时水流异常检测历史曲线"><path d="M50 18H510 M50 66H510 M50 115H510" class="chart-grid"/><path :d="`M50 ${chartThresholdY}H510`" class="chart-threshold"/><polyline v-if="chartPoints" :points="chartPoints" class="chart-series"/><text x="5" y="20">{{ chartMaximum.toFixed(3) }}</text><text x="5" :y="chartThresholdY + 2">{{ detectionThreshold.toFixed(3) }}</text><text x="5" y="118">0.000</text><text x="50" y="133">-5s</text><text x="480" y="133">当前</text><text v-if="!chartPoints" x="285" y="99" class="chart-empty">等待检测数据</text></svg></div></section>
         </div>
       </main>
-      <footer class="bottom-bar"><div class="file-info"><span>视频</span><strong :title="activeName">{{ activeName }}</strong><i v-if="activeName"/><span v-if="activeName">{{ videoWidth }} × {{ videoHeight }} · {{ analysisFPS.toFixed(2) }} FPS</span></div><div class="footer-actions"><button class="btn btn-muted" @click="restart">↻ 从头播放</button><button class="btn btn-danger" :disabled="!isPlaying" @click="stop">■ 暂停播放</button><button class="btn btn-primary" :disabled="!detectionRecords.length" title="导出当前检测时段的逐帧采样数据" @click="detection.exportCSV">⇩ 导出检测结果</button></div></footer>
+      <footer class="bottom-bar"><div class="file-info"><span>视频</span><strong :title="activeName">{{ activeName }}</strong><i v-if="activeName"/><span v-if="activeName">{{ videoWidth }} × {{ videoHeight }} · {{ analysisFPS.toFixed(2) }} FPS</span></div><div class="footer-actions"><button v-if="!isLiveVideo" class="btn btn-muted" @click="restart">↻ 从头播放</button><button class="btn btn-danger" :disabled="!isPlaying" @click="stop">{{ isLiveVideo ? '■ 暂停显示' : '■ 暂停播放' }}</button><button class="btn btn-primary" :disabled="!detectionRecords.length" title="导出当前检测时段的逐帧采样数据" @click="detection.exportCSV">⇩ 导出检测结果</button></div></footer>
     </template>
 
     <input ref="fileInput" class="hidden-input" type="file" accept="video/*,.mp4,.mov,.avi,.mkv,.webm,.m4v" aria-label="选择视频文件" @change="onFileChange"/>
-    <AlgorithmSettingsModal v-if="algorithmSettingsOpen && currentRole === 'admin'" :settings="algorithmSettings" @cancel="cancelAlgorithmSettings" @save="applyAlgorithmSettings"/>
+    <AlgorithmSettingsModal v-if="algorithmSettingsOpen && currentRole === 'admin'" :settings="algorithmSettings" :source="videoSourceSettings" :busy="settingsBusy || archiveBusy" @cancel="cancelAlgorithmSettings" @save="applyAlgorithmSettings" @save-source="applyVideoSourceSettings" @import-profile="importDeviceProfile" @export-profile="exportDeviceProfile"/>
     <AdminAccessDialog v-if="adminDialogOpen" :configured="adminConfigured" :busy="adminBusy" :error="adminError" @cancel="adminDialogOpen = false" @submit="authorizeAdministrator"/>
     <div v-if="modalOpen && currentRole === 'admin'" class="modal-mask" @click.self="closeCalibration">
       <section class="calibration-modal" role="dialog" aria-modal="true" aria-labelledby="calibration-title">
@@ -1008,8 +1041,9 @@ onBeforeUnmount(() => {
             </div>
             <p v-if="stationError" class="station-error" role="alert">{{ stationError }}</p>
           </div>
-          <div ref="calibrationStage" class="calibration-stage" :class="{ 'stage-ready': !!draftWidth }"><div class="video-fit calibration-fit" :style="calibrationViewportStyle" @click="onCalibrationClick"><video ref="calibrationVideo" :src="previewUrl" playsinline muted preload="metadata" @loadedmetadata="onCalibrationMetadata" @loadeddata="onCalibrationFrameReady" @timeupdate="onCalibrationTime" @seeking="calibrationFrameReady = false" @seeked="onCalibrationFrameReady" @error="notify('无法读取视频，请尝试其他格式')"/><svg ref="calibrationSvg" class="roi-overlay" :viewBox="draftOverlaySize" preserveAspectRatio="none" aria-hidden="true"><template v-if="center"><path :d="`M ${center.x-13} ${center.y} h26 M ${center.x} ${center.y-13} v26`" class="calib-cross"/><circle :cx="center.x" :cy="center.y" r="4" fill="#59d7ff"/></template><template v-if="draftCalibration"><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius" class="calib-wafer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * outerRadiusRatio" class="ring-outer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * innerRadiusRatio" class="ring-inner"/></template></svg></div></div>
-          <div class="calib-timeline"><span>定位画面</span><input type="range" aria-label="标注画面位置" min="0" :max="calibrationDuration || 1" step="0.01" :value="calibrationTime" :style="{ '--progress': calibrationProgress + '%' }" :disabled="!calibrationDuration" @input="onCalibrationSeek"/><span>{{ formatTime(calibrationTime) }} / {{ formatTime(calibrationDuration) }}</span></div>
+          <div ref="calibrationStage" class="calibration-stage" :class="{ 'stage-ready': !!draftWidth }"><div class="video-fit calibration-fit" :style="calibrationViewportStyle" @click="onCalibrationClick"><img v-if="isLiveVideo && liveSnapshotUrl" class="live-calibration-image" :src="liveSnapshotUrl" alt="实时摄像头抓拍画面" /><video v-if="!isLiveVideo" ref="calibrationVideo" :src="previewUrl" playsinline muted preload="metadata" @loadedmetadata="onCalibrationMetadata" @loadeddata="onCalibrationFrameReady" @timeupdate="onCalibrationTime" @seeking="calibrationFrameReady = false" @seeked="onCalibrationFrameReady" @error="notify('无法读取视频，请尝试其他格式')"/><svg ref="calibrationSvg" class="roi-overlay" :viewBox="draftOverlaySize" preserveAspectRatio="none" aria-hidden="true"><template v-if="center"><path :d="`M ${center.x-13} ${center.y} h26 M ${center.x} ${center.y-13} v26`" class="calib-cross"/><circle :cx="center.x" :cy="center.y" r="4" fill="#59d7ff"/></template><template v-if="draftCalibration"><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius" class="calib-wafer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * outerRadiusRatio" class="ring-outer"/><circle :cx="draftCalibration.cx" :cy="draftCalibration.cy" :r="draftCalibration.radius * innerRadiusRatio" class="ring-inner"/></template></svg></div></div>
+          <div v-if="isLiveVideo" class="live-calibration-controls"><span>实时抓拍标定</span><button type="button" class="btn btn-muted" :disabled="liveSnapshotBusy" @click="refreshLiveSnapshot">{{ liveSnapshotBusy ? '抓拍中…' : '刷新画面' }}</button></div>
+          <div v-else class="calib-timeline"><span>定位画面</span><input type="range" aria-label="标注画面位置" min="0" :max="calibrationDuration || 1" step="0.01" :value="calibrationTime" :style="{ '--progress': calibrationProgress + '%' }" :disabled="!calibrationDuration" @input="onCalibrationSeek"/><span>{{ formatTime(calibrationTime) }} / {{ formatTime(calibrationDuration) }}</span></div>
           <div class="calibration-status"><strong>{{ calibrationPhase }}</strong><span>{{ calibrationMeasure }}</span></div>
           <div v-if="coordinateCheckEnabled" class="coordinate-debug">
             <div class="coordinate-debug-heading"><span><b>坐标校验</b>　红点：鼠标实际落点　蓝色十字：绘制位置</span><button type="button" class="coordinate-copy" :disabled="!coordinateCheck" @click="copyCoordinateCheck">复制数据</button></div>
