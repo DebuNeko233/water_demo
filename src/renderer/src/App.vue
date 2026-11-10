@@ -6,7 +6,7 @@ import { calibrationPointerToSource } from './utils/calibrationPointer.mjs'
 import { usePythonVideoStream } from './composables/usePythonVideoStream'
 import {
   STAGES, getStationProfile, saveStationCalibration,
-  captureStationReference, removeStationReference,
+  captureStationReference, removeStationReference, captureLiveStationReference,
   exportStationArchive, importStationArchive,
   type StageKey, type StageMode, type StationProfile, type ReferenceGroup,
 } from './services/station-profile'
@@ -18,6 +18,11 @@ import {
   type UserRole,
 } from './services/user-management'
 import brandIconUrl from './assets/brand-icon.ico?url'
+import {
+  publicVideoSource, adminVideoSource, saveVideoSource, cameraSnapshot,
+  DEFAULT_VIDEO_SOURCE,
+  type VideoSourceSettings, type VideoSourceStatus,
+} from './services/video-source'
 import {
   DEFAULT_ALGORITHM_SETTINGS, copyAlgorithmSettings,
   type AlgorithmSettings,
@@ -48,6 +53,10 @@ const calibrationVideo = ref<HTMLVideoElement | null>(null)
 // Administrator-approved settings are stored and enforced in Python, never
 // trusted from browser localStorage or a client-supplied configuration.
 const algorithmSettings = ref<AlgorithmSettings>(copyAlgorithmSettings(DEFAULT_ALGORITHM_SETTINGS))
+const videoSource = ref<VideoSourceStatus>({ kind: 'file', usb_index: 0 })
+const videoSourceSettings = ref<VideoSourceSettings>({ ...DEFAULT_VIDEO_SOURCE })
+const liveSnapshotUrl = ref('')
+const liveSnapshotBusy = ref(false)
 const currentRole = ref<UserRole>('operator')
 const adminToken = ref('')
 const adminConfigured = ref(false)
@@ -102,6 +111,7 @@ const duration = detection.duration
 const videoWidth = detection.videoWidth
 const videoHeight = detection.videoHeight
 const isPlaying = detection.isPlaying
+const isLiveVideo = computed(() => videoSource.value.kind !== 'file')
 const videoError = detection.error
 const message = ref('')
 let previouslyPlaying = false
@@ -152,6 +162,9 @@ const calibrationMeasure = computed(() => {
   return radius.value === null ? `${base} · 半径 --` : `${base} · 半径 ${Math.round(radius.value)} px`
 })
 const previewUrl = computed(() => pendingUrl.value || activeUrl.value)
+const sourceLabel = computed(() => videoSource.value.kind === 'rtsp'
+  ? 'RTSP 实时摄像头'
+  : videoSource.value.kind === 'usb' ? 'USB 摄像头 #' + videoSource.value.usb_index : '本地视频')
 const draftOverlaySize = computed(() => sourceViewBox(draftWidth.value, draftHeight.value))
 const detectionThreshold = computed(() => detectorResult.value?.s_water_threshold ?? algorithmSettings.value.s_water_threshold)
 const sectorThreshold = computed(() => detectorResult.value?.sector_threshold ?? algorithmSettings.value.sector_threshold)
@@ -251,10 +264,75 @@ function formatTime(value: number): string {
   return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
 }
 function chooseVideo(): void {
+  if (isLiveVideo.value) {
+    void startConfiguredSource()
+    return
+  }
   if (!fileInput.value) return
   fileInput.value.value = ''
   fileInput.value.click()
 }
+async function refreshVideoSource(): Promise<void> {
+  try {
+    videoSource.value = await publicVideoSource()
+  } catch {
+    // Source service may still be initializing.
+  }
+}
+
+async function refreshAdminVideoSource(): Promise<void> {
+  if (!adminToken.value) return
+  try {
+    videoSourceSettings.value = await adminVideoSource(adminToken.value)
+  } catch (error) {
+    notify('视频源配置读取失败：' + String(error))
+  }
+}
+
+async function startConfiguredSource(): Promise<void> {
+  if (!isLiveVideo.value) return
+  if (!stationProfile.value) await refreshStationProfile()
+  const auto = stationProfile.value?.ready
+    ? stationProfile.value.stages.P1.calibration : null
+  const preferred = stationMode.value === 'auto' ? auto : calibration.value
+  const chosen = preferred ?? auto
+  if (!chosen) {
+    notify('请切换管理员完成当前摄像头的晶圆标注')
+    if (currentRole.value === 'admin' && adminToken.value) openCalibration(false)
+    return
+  }
+  const mode: StageMode = preferred ? stationMode.value : 'auto'
+  stationMode.value = mode
+  calibration.value = chosen
+  activeName.value = sourceLabel.value
+  activeVideoPath.value = ''
+  videoWidth.value = chosen.width
+  videoHeight.value = chosen.height
+  screen.value = 'monitor'
+  await detection.open('', chosen, 0, true, mode)
+}
+
+async function refreshLiveSnapshot(): Promise<void> {
+  if (!isLiveVideo.value || !adminToken.value || liveSnapshotBusy.value) return
+  liveSnapshotBusy.value = true
+  stationError.value = ''
+  try {
+    const frame = await cameraSnapshot(adminToken.value)
+    if (!modalOpen.value) return
+    liveSnapshotUrl.value = 'data:image/jpeg;base64,' + frame.jpeg_base64
+    draftWidth.value = frame.width
+    draftHeight.value = frame.height
+    calibrationFrameReady.value = true
+    calibrationTime.value = 0
+    calibrationDuration.value = 0
+    if (stationMode.value === 'auto') selectStation(selectedStation.value)
+  } catch (error) {
+    stationError.value = '无法抓取摄像头画面：' + String(error)
+  } finally {
+    liveSnapshotBusy.value = false
+  }
+}
+
 async function onFileChange(event: Event): Promise<void> {
   const file = (event.target as HTMLInputElement).files?.[0]
   if (!file) return
@@ -405,7 +483,7 @@ async function captureCurrentReference(): Promise<void> {
   if (currentRole.value !== 'admin' || !adminToken.value ||
       stationBusy.value || !draftCalibration.value) return
   const file = pendingVideoPath.value || activeVideoPath.value
-  if (!file) { stationError.value = '请先选择视频'; return }
+  if (!isLiveVideo.value && !file) { stationError.value = '请先选择视频'; return }
   if (calibrationVideo.value?.seeking) {
     stationError.value = '请等待画面跳转结束，再采集参考帧'
     return
@@ -417,9 +495,14 @@ async function captureCurrentReference(): Promise<void> {
     // Python side; browser preview images are never used for matching.
     stationProfile.value = await saveStationCalibration(
       selectedStation.value, draftCalibration.value, adminToken.value)
-    const time = calibrationVideo.value?.currentTime ?? calibrationTime.value
     const group: ReferenceGroup = selectedStation.value === 'P3' ? selectedP3Nozzle.value : 'default'
-    stationProfile.value = await captureStationReference(selectedStation.value, file, time, group, adminToken.value)
+    if (isLiveVideo.value) {
+      stationProfile.value = await captureLiveStationReference(selectedStation.value, group, adminToken.value)
+      await refreshLiveSnapshot()
+    } else {
+      const time = calibrationVideo.value?.currentTime ?? calibrationTime.value
+      stationProfile.value = await captureStationReference(selectedStation.value, file, time, group, adminToken.value)
+    }
     notify(selectedStation.value + ' 参考帧已采集')
   } catch (error) {
     stationError.value = String(error)
@@ -459,14 +542,17 @@ function openCalibration(existing: boolean): void {
   void refreshStationProfile()
   if (stationMode.value === 'auto') selectStation(selectedStation.value)
   nextTick(() => {
-    // Metadata is loaded by the modal video. A new source starts at frame zero;
-    // re-calibration uses the currently displayed frame.
-    calibrationVideo.value?.load()
+    if (isLiveVideo.value) {
+      void refreshLiveSnapshot()
+    } else {
+      // Re-calibration of a local file uses the browser preview at its position.
+      calibrationVideo.value?.load()
+    }
   })
 }
 function editCalibration(): void {
   if (currentRole.value !== 'admin' || !adminToken.value) return
-  if (calibration.value && activeUrl.value) openCalibration(true)
+  if (calibration.value && (activeUrl.value || isLiveVideo.value)) openCalibration(true)
 }
 function onCalibrationMetadata(): void {
   const video = calibrationVideo.value
@@ -600,6 +686,7 @@ function closeCalibration(): void {
     pendingVideoPath.value = ''
     pendingFile.value = null
   }
+  liveSnapshotUrl.value = ''
   if (screen.value === 'monitor' && previouslyPlaying) detection.play()
 }
 async function confirmCalibration(): Promise<void> {
@@ -610,7 +697,7 @@ async function confirmCalibration(): Promise<void> {
   if (!nextCalibration) return
   const selectedTime = calibrationVideo.value?.currentTime ?? calibrationTime.value
   calibrationFrameTime.value = Number.isFinite(selectedTime) ? selectedTime : 0
-  const replacing = !!pendingFile.value
+  const replacing = !isLiveVideo.value && !!pendingFile.value
   if (replacing && pendingFile.value) {
     if (activeUrl.value) URL.revokeObjectURL(activeUrl.value)
     activeUrl.value = pendingUrl.value
@@ -624,12 +711,14 @@ async function confirmCalibration(): Promise<void> {
   videoWidth.value = nextCalibration.width
   videoHeight.value = nextCalibration.height
   modalOpen.value = false
+  liveSnapshotUrl.value = ''
   screen.value = 'monitor'
   seekDraft.value = null
-  // Calibration preview may use the browser video decoder, but the monitoring
-  // engine opens the same original disk file directly in Python/OpenCV.
+  activeName.value = isLiveVideo.value ? sourceLabel.value : activeName.value
+  // Both file and live frames enter the same unchanged Python WaterDetector.
   await nextTick()
-  await detection.open(activeVideoPath.value, nextCalibration, calibrationFrameTime.value, false, stationMode.value)
+  await detection.open(isLiveVideo.value ? '' : activeVideoPath.value, nextCalibration,
+    isLiveVideo.value ? 0 : calibrationFrameTime.value, isLiveVideo.value, stationMode.value)
 }
 function onMainSeek(event: Event): void {
   if (seekDraft.value === null) {
@@ -649,16 +738,17 @@ function togglePlay(): void {
   else detection.play()
 }
 function jump(seconds: number): void {
-  if (!duration.value) return
+  if (isLiveVideo.value || !duration.value) return
   void detection.seek(Math.max(0, Math.min(duration.value, currentTime.value + seconds)))
 }
-function restart(): void { void detection.seek(0, true) }
+function restart(): void { if (!isLiveVideo.value) void detection.seek(0, true) }
 function stop(): void { detection.pause() }
 async function retryPythonVideo(): Promise<void> {
   try {
     await window.desktop.backend.retry()
-    if (calibration.value && activeVideoPath.value) {
-      await detection.open(activeVideoPath.value, calibration.value, currentTime.value, false, stationMode.value)
+    if (calibration.value && (activeVideoPath.value || isLiveVideo.value)) {
+      await detection.open(isLiveVideo.value ? '' : activeVideoPath.value, calibration.value,
+        isLiveVideo.value ? 0 : currentTime.value, isLiveVideo.value, stationMode.value)
     }
   } catch (reason) {
     notify('Python 重连失败，请查看启动日志')
