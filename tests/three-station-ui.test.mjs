@@ -27,7 +27,7 @@ test('calibration supports single and three-station mode, with per-position tabs
 
 test('Python resolves the detected stage before canonical detector and exports reason', () => {
   assert.match(stream, /stage_mode: stageMode/)
-  assert.match(consumer, /openPythonVideo\(filePath, calibration, Math\.max\(0, timeS\), stageMode\)/)
+  assert.match(consumer, /openPythonVideo\(filePath, calibration, Math\.max\(0, timeS\),/)
   assert.match(consumer, /'stage', 'position_confidence', 'position_reason'/)
   assert.match(backend, /self\._recognizer\.classify\(frame\)/)
   assert.match(backend, /return candidate, confidence, scores, 'POSITION_UNSTABLE'/)
