@@ -46,10 +46,24 @@ def make_video(tmp_path: Path):
     return path
 
 
+def station_admin_token(client):
+    token = getattr(client, '_station_admin_token', None)
+    if token:
+        return token
+    password = 'Station#11920'
+    response = client.post('/api/users/login', json={'password': password})
+    if response.status_code == 409:
+        response = client.post('/api/users/setup', json={'password': password})
+    assert response.status_code == 200, response.text
+    client._station_admin_token = response.json()['admin_token']
+    return client._station_admin_token
+
+
 def build_profile(client, source):
     for i, stage in enumerate(STAGES):
         cy = [26, 48, 70][i]
         resp = client.post('/api/stations/calibration', json={
+            'admin_token': station_admin_token(client),
             'stage': stage, 'calibration': {
                 'cx': 48, 'cy': cy, 'radius': 26,
                 'width': 96, 'height': 96,
@@ -59,6 +73,7 @@ def build_profile(client, source):
         for j in range(3):
             time_s = (i * 25 + j * 5) / 30
             response = client.post('/api/stations/reference', json={
+            'admin_token': station_admin_token(client),
                 'stage': stage, 'file_path': str(source), 'time_s': time_s,
             })
             assert response.status_code == 200, response.text
@@ -85,10 +100,12 @@ def test_all_three_stations_capture_persist_and_abstain(monkeypatch, tmp_path):
         assert model.classify(np.zeros((96,96,3), dtype=np.uint8))[0] == 'UNKNOWN'
         sample = profile['stages']['P1']['references'][0]
         duplicate = client.post('/api/stations/reference', json={
+            'admin_token': station_admin_token(client),
             'stage': 'P1', 'file_path': str(source), 'time_s': sample['time_s'],
         })
         assert duplicate.status_code == 422
         deleted = client.post('/api/stations/reference/remove', json={
+            'admin_token': station_admin_token(client),
             'stage': 'P1', 'reference_id': sample['id'],
         })
         assert deleted.status_code == 200
@@ -156,6 +173,7 @@ def test_profiles_reject_mismatched_resolution(monkeypatch, tmp_path):
         })
         assert mismatch.status_code == 200
         client.post('/api/stations/calibration', json={
+            'admin_token': station_admin_token(client),
             'stage':'P3','calibration':{'cx':48,'cy':70,'radius':26,'width':120,'height':96},
         })
         assert client.get('/api/stations/profile').json()['ready'] is False
@@ -173,6 +191,7 @@ def test_moving_roi_invalidates_its_old_reference_snapshots(monkeypatch, tmp_pat
         original = build_profile(client, source)
         ids = [ref['id'] for ref in original['stages']['P1']['references']]
         updated = client.post('/api/stations/calibration', json={
+            'admin_token': station_admin_token(client),
             'stage': 'P1',
             'calibration': {
                 'cx': 48, 'cy': 48, 'radius': 26,
@@ -206,6 +225,7 @@ def test_three_refs_per_stage_required_even_when_p3_groups_are_mixed(monkeypatch
         refs = profile['stages']['P3']['references']
         for ref in refs[1:]:
             assert client.post('/api/stations/reference/remove', json={
+            'admin_token': station_admin_token(client),
                 'stage': 'P3', 'reference_id': ref['id'],
             }).status_code == 200
         assert client.get('/api/stations/profile').json()['ready'] is False
@@ -233,6 +253,7 @@ def test_two_p3_nozzle_appearances_use_one_roi(monkeypatch, tmp_path):
         build_profile(client, source)
         for j in range(3):
             response = client.post('/api/stations/reference', json={
+            'admin_token': station_admin_token(client),
                 'stage': 'P3', 'group': 'nozzle_b',
                 'file_path': str(secondary), 'time_s': j * 5 / 30,
             })
@@ -250,6 +271,7 @@ def test_two_p3_nozzle_appearances_use_one_roi(monkeypatch, tmp_path):
         assert recognizer.classify(np.zeros((96, 96, 3), dtype=np.uint8))[0] == 'UNKNOWN'
         # A nozzle label is not another wafer position: no custom P1/P2 bank.
         invalid = client.post('/api/stations/reference', json={
+            'admin_token': station_admin_token(client),
             'stage': 'P2', 'group': 'nozzle_b',
             'file_path': str(source), 'time_s': 0.0,
         })
@@ -264,9 +286,7 @@ def test_approved_station_threshold_applies_to_auto_video(monkeypatch, tmp_path)
     source = make_video(tmp_path)
     with TestClient(create_app()) as client:
         build_profile(client, source)
-        token = client.post('/api/users/setup', json={
-            'password': 'Threshold#984',
-        }).json()['admin_token']
+        token = station_admin_token(client)
         result = client.post('/api/users/settings', json={
             'admin_token': token,
             'settings': {'station_match_threshold': .93},
