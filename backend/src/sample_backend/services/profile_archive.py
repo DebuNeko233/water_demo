@@ -44,6 +44,10 @@ def _normalise_profile(raw: object) -> tuple[dict, dict[str, tuple[int, int]]]:
     if not isinstance(stages, dict) or set(stages) != set(STAGES):
         raise InvalidFrame("设备配置缺少 P1/P2/P3 工位")
     normalized: dict = {"version": 1, "stages": {}}
+    # Older archives had no standalone ROI. Preserve it when present.
+    if raw.get('single_calibration') is not None:
+        normalized['single_calibration'] = CalibrationInput.model_validate(
+            raw['single_calibration']).model_dump()
     image_sizes: dict[str, tuple[int, int]] = {}
     for stage in STAGES:
         entry = stages[stage]
