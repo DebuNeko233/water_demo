@@ -60,7 +60,7 @@ test('only administrators can re-annotate; operators reuse approved calibration 
   for (const path of ['/calibration', '/reference', '/reference/remove']) {
     assert.ok(stations.includes("@router.post('" + path + "')"))
   }
-  assert.equal((stations.match(/user_access\.require_admin\(req\.admin_token\)/g) ?? []).length, 3)
+  assert.equal((stations.match(/user_access\.require_admin\(req\.admin_token\)/g) ?? []).length, 4)
   assert.ok(stationClient.includes('admin_token: adminToken'))
   assert.ok(auth.includes('def require_admin(self, token: str | None)'))
 })
