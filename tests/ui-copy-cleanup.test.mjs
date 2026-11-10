@@ -25,7 +25,7 @@ test('normal monitor UI omits redundant prose while preserving useful controls',
   ]
   for (const phrase of removed) assert.ok(!app.includes(phrase), 'Redundant UI text: ' + phrase)
   for (const essential of [
-    '标注晶圆位置', '重新标注', '打开视频', 'S_water', 'NG 阈值',
+    '标注晶圆位置', '重新标注', '打开视频', '水流异常系数', 'NG 阈值',
     '导出检测结果', '确认', '系统设置', 'videoError', 'calibrationPhase',
     '开始检测', '停止检测', '异常谱线', '视频参数',
   ]) assert.ok(app.includes(essential), 'Essential UI text missing: ' + essential)
@@ -36,6 +36,10 @@ test('normal monitor UI omits redundant prose while preserving useful controls',
   assert.ok(app.includes('暂停播放'))
   assert.ok(!app.includes('检测区域'))
   assert.ok(!app.includes('<div class="data-label">S_water</div>'))
+  assert.ok(!app.includes('S_water · 当前值'))
+  assert.ok(!app.includes('<i/> S_water'))
+  assert.ok(app.includes('<div class="data-label">水流异常系数 · 当前值</div>'))
+  assert.ok(app.includes('<i/> 水流异常系数'))
   assert.ok(!app.includes('<div class="data-label">NG 阈值</div>'))
   assert.match(app, /<span>视频参数<\/span><strong :title="sourceLabel">\{\{ sourceLabel \}\}<\/strong>/)
 })
