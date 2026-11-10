@@ -47,6 +47,9 @@ try {
   const exitCode = await launch()
   assert.ok(fs.existsSync(reportPath), 'Electron did not produce the smoke test report')
   const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'))
+  if (exitCode !== 0 || report.exitCode !== 0) {
+    console.error('Packaged Electron smoke report:', JSON.stringify(report))
+  }
   assert.equal(exitCode, 0, 'Electron executable exited with failure')
   assert.equal(report.exitCode, 0, 'Electron reported a failed backend lifecycle')
   assert.ok(Number.isInteger(report.pythonPid) && report.pythonPid > 0)
