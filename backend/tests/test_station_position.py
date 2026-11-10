@@ -336,3 +336,116 @@ def test_station_threshold_changes_unknown_gate_without_changing_water_detector(
         assert stage == 'P1'
         assert abs(score - .82) < 1e-6
         assert scores['P2'] == .40 and scores['P3'] == .40
+
+
+
+def test_independently_enabled_stations_skip_inactive_positions(monkeypatch, tmp_path):
+    """P2/P3 may be active without P1; P2 alone requires no reference images."""
+    monkeypatch.setenv('APP_DATA_DIR', str(tmp_path / 'active'))
+    source = make_video(tmp_path)
+    with TestClient(create_app()) as client:
+        original = build_profile(client, source)
+        assert original['enabled_stages'] == ['P1', 'P2', 'P3']
+        token = station_admin_token(client)
+        unauthorized = client.post('/api/stations/enabled', json={
+            'stage': 'P1', 'enabled': False,
+        })
+        assert unauthorized.status_code == 403
+        invalid = client.post('/api/stations/enabled', json={
+            'admin_token': token, 'stage': 'P4', 'enabled': False,
+        })
+        assert invalid.status_code == 422
+
+        disabled = client.post('/api/stations/enabled', json={
+            'admin_token': token, 'stage': 'P1', 'enabled': False,
+        })
+        assert disabled.status_code == 200, disabled.text
+        assert disabled.json()['enabled_stages'] == ['P2', 'P3']
+        assert disabled.json()['ready'] is True
+        profile, model = client.app.state.station_profile.build(96, 96)
+        assert model is not None and model.ready
+        assert model.active_stages == ('P2', 'P3')
+        for scene in (wafer_frame('P1', 1), wafer_frame('P2', 1)):
+            stage, score, scores = model.classify(scene)
+            assert stage != 'P1'
+            assert set(scores) == {'P2', 'P3'}
+
+        # One enabled station uses its own ROI directly, no image matching.
+        disabled = client.post('/api/stations/enabled', json={
+            'admin_token': token, 'stage': 'P3', 'enabled': False,
+        })
+        assert disabled.json()['enabled_stages'] == ['P2']
+        ids = [ref['id'] for ref in disabled.json()['stages']['P2']['references']]
+        for ident in ids:
+            assert client.post('/api/stations/reference/remove', json={
+                'admin_token': token, 'stage': 'P2', 'reference_id': ident,
+            }).status_code == 200
+        snapshot = client.get('/api/stations/profile').json()
+        assert snapshot['ready'] is True
+        assert snapshot['stages']['P2']['references'] == []
+        assert snapshot['stages']['P2']['ready'] is True
+        profile, model = client.app.state.station_profile.build(96, 96)
+        assert model is None
+
+        opened = client.post('/api/video/open', json={
+            'file_path': str(source), 'stage_mode': 'configured',
+            # Deliberately supply stale P1 ROI to verify the approved
+            # enabled P2 ROI overrides it in unified mode.
+            'calibration': {'cx': 48, 'cy': 26, 'radius': 26,
+                            'width': 96, 'height': 96},
+        })
+        assert opened.status_code == 200, opened.text
+        assert opened.json()['stage_mode'] == 'single'
+        assert opened.json()['frame']['result']['stage'] == 'P2'
+        assert client.app.state.video_stream._detector.calib.cy == 48
+        sid = opened.json()['session_id']
+
+        # Changing enable flags invalidates the previously open stream.
+        disabled_all = client.post('/api/stations/enabled', json={
+            'admin_token': token, 'stage': 'P2', 'enabled': False,
+        })
+        assert disabled_all.status_code == 200
+        assert disabled_all.json()['enabled_stages'] == []
+        assert disabled_all.json()['ready'] is False
+        assert client.post('/api/video/next', json={
+            'session_id': sid,
+        }).status_code == 409
+        assert client.post('/api/video/open', json={
+            'file_path': str(source), 'stage_mode': 'configured',
+            'calibration': {'cx': 48, 'cy': 48, 'radius': 26,
+                            'width': 96, 'height': 96},
+        }).status_code == 422
+
+
+def test_legacy_single_only_profile_migrates_to_enabled_p1(monkeypatch, tmp_path):
+    import json
+    root = tmp_path / 'legacy' / 'stations'
+    root.mkdir(parents=True)
+    standalone = {'cx': 48, 'cy': 48, 'radius': 30,
+                  'width': 96, 'height': 96}
+    (root / 'profile.json').write_text(json.dumps({
+        'version': 1, 'single_calibration': standalone,
+        'stages': {stage: {'calibration': None, 'references': []}
+                   for stage in STAGES},
+    }), encoding='utf-8')
+    monkeypatch.setenv('APP_DATA_DIR', str(tmp_path / 'legacy'))
+    source = make_video(tmp_path)
+    with TestClient(create_app()) as client:
+        result = client.get('/api/stations/profile').json()
+        assert result['enabled_stages'] == ['P1']
+        assert result['ready'] is True
+        assert result['stages']['P1']['calibration'] == standalone
+        assert not result['stages']['P2']['enabled']
+        assert not result['stages']['P3']['enabled']
+        opened = client.post('/api/video/open', json={
+            'file_path': str(source), 'stage_mode': 'configured',
+            'calibration': standalone,
+        })
+        assert opened.status_code == 200, opened.text
+        assert opened.json()['frame']['result']['stage'] == 'P1'
+        token = station_admin_token(client)
+        assert client.post('/api/stations/enabled', json={
+            'admin_token': token, 'stage': 'P2', 'enabled': True,
+        }).status_code == 200
+        # A second enabled ROI must now be annotated before inspection.
+        assert client.get('/api/stations/profile').json()['ready'] is False
