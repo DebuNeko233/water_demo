@@ -167,6 +167,8 @@ const draftOverlaySize = computed(() => sourceViewBox(draftWidth.value, draftHei
 const detectionThreshold = computed(() => detectorResult.value?.s_water_threshold ?? algorithmSettings.value.s_water_threshold)
 const sectorThreshold = computed(() => detectorResult.value?.sector_threshold ?? algorithmSettings.value.sector_threshold)
 const sectorCount = computed(() => detectorResult.value?.sector_count ?? algorithmSettings.value.sector_count)
+const innerRadiusRatio = computed(() => detectorResult.value?.inner_radius_ratio ?? algorithmSettings.value.inner_radius_ratio)
+const outerRadiusRatio = computed(() => detectorResult.value?.outer_radius_ratio ?? algorithmSettings.value.outer_radius_ratio)
 const resultStatus = computed(() => {
   if (detectorStatus.value === 'error') return 'ERROR'
   if (detectorStatus.value === 'connecting') return '连接中'
