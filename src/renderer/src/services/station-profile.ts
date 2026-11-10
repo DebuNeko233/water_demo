@@ -18,6 +18,7 @@ export interface StageConfig {
 }
 export interface StationProfile {
   version: number
+  single_calibration?: WaferCalibration | null
   ready: boolean
   minimum_references: number
   stages: Record<StageKey, StageConfig>
@@ -25,6 +26,12 @@ export interface StationProfile {
 export function getStationProfile(): Promise<StationProfile> {
   return window.desktop.backend.request<StationProfile>('GET', '/api/stations/profile')
 }
+export function saveSingleCalibration(calibration: WaferCalibration, adminToken: string): Promise<StationProfile> {
+  return window.desktop.backend.request('POST', '/api/stations/calibration/single', {
+    calibration, admin_token: adminToken,
+  })
+}
+
 export function saveStationCalibration(stage: StageKey, calibration: WaferCalibration, adminToken: string): Promise<StationProfile> {
   return window.desktop.backend.request<StationProfile>('POST', '/api/stations/calibration', {
     stage, calibration, admin_token: adminToken,
