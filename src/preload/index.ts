@@ -26,6 +26,7 @@ const desktop: DesktopBridge = {
   },
   system: {
     selectFile: () => ipcRenderer.invoke('system:select-file'),
+    selectVideoFile: () => ipcRenderer.invoke('system:select-video-file'),
     chooseProfileArchive: () => ipcRenderer.invoke('system:choose-profile-archive'),
     saveProfileArchive: () => ipcRenderer.invoke('system:save-profile-archive'),
     getPathForFile: (file) => webUtils.getPathForFile(file),
