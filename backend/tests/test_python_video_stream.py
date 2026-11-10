@@ -123,3 +123,43 @@ def test_rejects_missing_file_and_wrong_calibration_before_start(tmp_path):
             },
         })
         assert invalid.status_code == 422
+        assert invalid.json()['detail'] == {
+            'code': 'CALIBRATION_RESOLUTION_MISMATCH',
+            'video_width': 96, 'video_height': 96,
+            'calibration_width': 720, 'calibration_height': 576,
+        }
+
+
+def test_oversize_video_is_distinguished_from_mismatched_roi(monkeypatch):
+    from sample_backend.services import video_stream
+
+    class MetadataOnlyCapture:
+        released = False
+
+        def isOpened(self):
+            return True
+
+        def get(self, prop):
+            return {
+                cv2.CAP_PROP_FRAME_WIDTH: 3840,
+                cv2.CAP_PROP_FRAME_HEIGHT: 2160,
+                cv2.CAP_PROP_FPS: 30,
+                cv2.CAP_PROP_FRAME_COUNT: 80,
+            }.get(prop, 0)
+
+        def release(self):
+            self.released = True
+
+    capture = MetadataOnlyCapture()
+    monkeypatch.setattr(video_stream, 'open_capture', lambda source, file_path='': capture)
+    with TestClient(create_app()) as client:
+        response = client.post('/api/video/open', json={
+            'calibration': {'cx': 400, 'cy': 400, 'radius': 200,
+                            'width': 3840, 'height': 2160},
+        })
+        assert response.status_code == 422
+        assert response.json()['detail'] == {
+            'code': 'VIDEO_RESOLUTION_TOO_LARGE',
+            'video_width': 3840, 'video_height': 2160,
+        }
+    assert capture.released
