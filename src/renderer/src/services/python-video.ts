@@ -50,6 +50,12 @@ export function readPythonVideoFrame(sessionId: string, batchFrames = 1): Promis
     session_id: sessionId, batch_frames: batchFrames,
   })
 }
+export function stopPythonVideo(sessionId: string): Promise<{ stopped: boolean }> {
+  return window.desktop.backend.request<{ stopped: boolean }>('POST', '/api/video/stop', {
+    session_id: sessionId,
+  })
+}
+
 export function seekPythonVideo(sessionId: string, timeS: number): Promise<AnnotatedFrame> {
   return window.desktop.backend.request<AnnotatedFrame>('POST', '/api/video/seek', {
     session_id: sessionId, time_s: timeS,
