@@ -7,7 +7,10 @@ import cv2
 
 from sample_backend.services.water_session import InvalidFrame, SessionExpired
 from sample_backend.services.user_access import AccessDenied
-from sample_backend.services.video_stream import VideoOpenInput, VideoNextInput, VideoSeekInput
+from sample_backend.services.video_stream import (
+    VideoOpenInput, VideoNextInput, VideoSeekInput,
+    VideoDimensionsMismatch, VideoDimensionsTooLarge,
+)
 from sample_backend.services.video_source import VideoSourceSettings, open_capture
 
 router = APIRouter(prefix='/api/video')
@@ -21,6 +24,18 @@ def video_open(req: VideoOpenInput, request: Request) -> dict:
         return request.app.state.video_stream.open(req.model_copy(update={'detector': settings}), source)
     except AccessDenied as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+    except VideoDimensionsMismatch as exc:
+        raise HTTPException(status_code=422, detail={
+            'code': 'CALIBRATION_RESOLUTION_MISMATCH',
+            'video_width': exc.width, 'video_height': exc.height,
+            'calibration_width': exc.calibration_width,
+            'calibration_height': exc.calibration_height,
+        }) from exc
+    except VideoDimensionsTooLarge as exc:
+        raise HTTPException(status_code=422, detail={
+            'code': 'VIDEO_RESOLUTION_TOO_LARGE',
+            'video_width': exc.width, 'video_height': exc.height,
+        }) from exc
     except (ValueError, InvalidFrame) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
