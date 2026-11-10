@@ -6,7 +6,7 @@ import {
   type AlgorithmSettings,
 } from '../utils/algorithm-settings.mjs'
 import {
-  DEFAULT_VIDEO_SOURCE, type VideoSourceSettings,
+  type VideoSourceSettings,
 } from '../services/video-source'
 
 type SettingsTab = 'parameters' | 'source' | 'device'
@@ -53,9 +53,6 @@ async function browseVideo(): Promise<void> {
   if (selected) sourceDraft.file_path = selected
 }
 
-function sourceDefaults(): void {
-  Object.assign(sourceDraft, DEFAULT_VIDEO_SOURCE)
-}
 function save(): void {
   if (error.value) return
   emit('save', copyAlgorithmSettings(draft))
@@ -135,7 +132,7 @@ function saveSource(): void {
 
         </div>
         <footer class="algorithm-dialog-foot">
-          <button type="button" class="btn btn-muted" :disabled="busy" @click="sourceDefaults">恢复本地视频</button>
+          <span></span>
           <div class="algorithm-foot-right">
             <span v-if="sourceError" class="algorithm-error" role="alert">{{ sourceError }}</span>
             <button type="button" class="btn btn-muted" @click="emit('cancel')">取消</button>
