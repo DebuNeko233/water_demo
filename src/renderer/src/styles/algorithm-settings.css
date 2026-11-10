@@ -41,3 +41,7 @@
 .source-field-help{margin-bottom:12px}
 .source-device-actions{min-height:190px}
 .source-device-buttons{display:flex;gap:12px;margin:20px 0;flex-wrap:wrap}
+
+.source-path-row{display:flex;gap:9px;align-items:center;min-width:0}
+.source-path-row input{flex:1;min-width:0;border:1px solid #395a70;border-radius:5px;background:#081a2a;padding:10px 11px;color:#e9f6ff;font-size:12px;text-overflow:ellipsis;direction:ltr}
+.source-path-row .btn{flex-shrink:0;min-height:38px}
