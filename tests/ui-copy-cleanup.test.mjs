@@ -43,3 +43,30 @@ test('normal monitor UI omits redundant prose while preserving useful controls',
   assert.ok(!app.includes('<div class="data-label">NG 阈值</div>'))
   assert.match(app, /<span>视频参数<\/span><strong :title="sourceLabel">\{\{ sourceLabel \}\}<\/strong>/)
 })
+
+
+test('monitor video action is icon-only, accessible, and maintains live reconnect affordance', () => {
+  const heading = app.match(/<div class="heading-actions">[\s\S]*?<\/div>/)?.[0]
+  assert.ok(heading)
+  const button = heading.match(/<button type="button" class="btn btn-muted video-open-icon"[\s\S]*?<\/button>/)?.[0]
+  assert.ok(button)
+  assert.match(button, /:title="isLiveVideo \? '重新连接' : '打开视频'"/)
+  assert.match(button, /:aria-label="isLiveVideo \? '重新连接' : '打开视频'"/)
+  assert.match(button, /@click="chooseVideo"/)
+  assert.match(button, /<svg v-if="isLiveVideo"/)
+  assert.match(button, /<svg v-else/)
+  assert.doesNotMatch(button, />\s*\{\{\s*isLiveVideo/)
+})
+
+test('monitor four data cells scale typography while retaining the responsive grid', () => {
+  const css = readFileSync(path.join(root, 'src/renderer/src/styles/zebovision.css'), 'utf8')
+  const panel = app.match(/<section class="panel data-panel">[\s\S]*?<\/section>/)?.[0]
+  assert.ok(panel)
+  assert.equal((panel.match(/class="metric"/g) ?? []).length, 4)
+  assert.match(css, /\.data-panel \.metric-value\s*\{\s*font-size:clamp\(24px,/)
+  assert.match(css, /\.data-panel \.metric \.data-label\s*\{\s*font-size:clamp\(13px,/)
+  assert.match(css, /grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/)
+  assert.match(css, /grid-template-rows:repeat\(2,minmax\(0,1fr\)\)/)
+  assert.match(css, /@media\(max-height:760px\)/)
+  assert.match(css, /\.video-panel \.heading-actions \.video-open-icon/)
+})
